@@ -6,11 +6,11 @@ From the repo root::
 
     HOTDATA_TOKEN=... HOTDATA_WORKSPACE_ID=... \\
       uv run python examples/02_execute_sql.py \\
-      'SELECT COUNT(*) AS n FROM your_conn.your_schema.your_table'
+      'SELECT COUNT(*) AS n FROM tpch.tpch_sf1.customer'
 
-If your workspace has exactly one connection and one schema you can omit
-``HOTDATA_DEFAULT_*`` env vars needed for unrelated APIs; federation SQL always
-includes the remote path (``conn.schema.table``).
+The default SQL targets ``tpch.tpch_sf1.customer`` (TPC-H over Hotdata). Override
+with a positional argument for any other federated reference
+(``connection.schema.table``).
 """
 
 from __future__ import annotations
@@ -29,8 +29,8 @@ _argp = parser("Execute SQL via Hotdata through Ibis.")
 _argp.add_argument(
     "sql",
     nargs="?",
-    default="SELECT 1 AS n",
-    help="SQL string (defaults to SELECT 1 AS n)",
+    default="SELECT COUNT(*) AS n FROM tpch.tpch_sf1.customer",
+    help="SQL string (default: row count on tpch.tpch_sf1.customer)",
 )
 _ns = parsed_args(_argp)
 con = ibis.hotdata.connect(**connect_kwargs(_ns))

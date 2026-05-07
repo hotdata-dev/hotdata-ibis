@@ -10,6 +10,20 @@ from werkzeug.wrappers import Request, Response
 pytest.importorskip("pytest_httpserver")
 from pytest_httpserver import HTTPServer
 
+# Federated identifiers for mocked Hotdata (matches SQL shape ``tpch.tpch_sf1.customer``).
+TPCH_CONN = "tpch"
+TPCH_SF1 = "tpch_sf1"
+TPCH_CUSTOMER_COLS = [
+    {"name": "c_custkey", "data_type": "INTEGER", "nullable": False},
+    {"name": "c_name", "data_type": "VARCHAR", "nullable": False},
+    {"name": "c_address", "data_type": "VARCHAR", "nullable": False},
+    {"name": "c_nationkey", "data_type": "INTEGER", "nullable": False},
+    {"name": "c_phone", "data_type": "VARCHAR", "nullable": False},
+    {"name": "c_acctbal", "data_type": "DECIMAL(15, 2)", "nullable": False},
+    {"name": "c_mktsegment", "data_type": "VARCHAR", "nullable": False},
+    {"name": "c_comment", "data_type": "VARCHAR", "nullable": False},
+]
+
 
 def test_connect_via_url(httpserver: HTTPServer, srv: str):
     url = (
@@ -48,8 +62,8 @@ def test_sql_execution(httpserver: HTTPServer, srv: str):
         token="tok",
         workspace_id="ws",
         verify_ssl=False,
-        default_connection="c1",
-        default_schema="public",
+        default_connection=TPCH_CONN,
+        default_schema=TPCH_SF1,
     )
 
     tbl = con.sql("SELECT 1 AS x", dialect="postgres")
@@ -63,8 +77,8 @@ def test_compile_scalar_no_roundtrip(httpserver: HTTPServer, srv: str):
         token="tok",
         workspace_id="ws",
         verify_ssl=False,
-        default_connection="c1",
-        default_schema="public",
+        default_connection=TPCH_CONN,
+        default_schema=TPCH_SF1,
     )
     expr = ibis.literal(41) + ibis.literal(1)
     sql = con.compile(expr)
@@ -74,7 +88,7 @@ def test_compile_scalar_no_roundtrip(httpserver: HTTPServer, srv: str):
 
 def test_information_schema_discovery(httpserver: HTTPServer, srv: str):
     httpserver.expect_request("/v1/connections").respond_with_json(
-        {"connections": [{"id": "cnx_pg", "name": "warehouse", "source_type": "postgres"}]}
+        {"connections": [{"id": TPCH_CONN, "name": "TPC-H SF1", "source_type": "duckdb"}]}
     )
     payload = {
         "count": 1,
@@ -83,38 +97,47 @@ def test_information_schema_discovery(httpserver: HTTPServer, srv: str):
         "next_cursor": None,
         "tables": [
             {
-                "connection": "cnx_pg",
-                "schema": "public",
-                "table": "orders",
+                "connection": TPCH_CONN,
+                "schema": TPCH_SF1,
+                "table": "customer",
                 "synced": True,
                 "last_sync": None,
-                "columns": [
-                    {"name": "id", "data_type": "BIGINT", "nullable": False},
-                    {"name": "sku", "data_type": "VARCHAR", "nullable": True},
-                ],
-            }
+                "columns": TPCH_CUSTOMER_COLS,
+            },
         ],
     }
     httpserver.expect_request("/v1/information_schema").respond_with_json(payload)
 
     con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
-    assert con.list_catalogs() == ["cnx_pg"]
-    assert con.list_databases(catalog="cnx_pg") == ["public"]
-    assert con.list_tables(database=("cnx_pg", "public")) == ["orders"]
-    expr = con.table("orders", database=("cnx_pg", "public"))
-    assert set(expr.columns) == {"id", "sku"}
+    assert con.list_catalogs() == [TPCH_CONN]
+    assert con.list_databases(catalog=TPCH_CONN) == [TPCH_SF1]
+    assert con.list_tables(database=(TPCH_CONN, TPCH_SF1)) == ["customer"]
+    expr = con.table("customer", database=(TPCH_CONN, TPCH_SF1))
+    assert set(expr.columns) == {c["name"] for c in TPCH_CUSTOMER_COLS}
 
 
 def test_information_schema_pagination_merges_pages(httpserver: HTTPServer, srv: str):
     httpserver.expect_request("/v1/connections").respond_with_json(
-        {"connections": [{"id": "c1", "name": "a", "source_type": "postgres"}]}
+        {"connections": [{"id": TPCH_CONN, "name": "TPC-H SF1", "source_type": "duckdb"}]}
     )
 
     rows_a = [
-        {"connection": "c1", "schema": "pub", "table": "apple", "synced": True, "columns": None}
+        {
+            "connection": TPCH_CONN,
+            "schema": TPCH_SF1,
+            "table": "customer",
+            "synced": True,
+            "columns": None,
+        },
     ]
     rows_b = [
-        {"connection": "c1", "schema": "pub", "table": "banana", "synced": True, "columns": None}
+        {
+            "connection": TPCH_CONN,
+            "schema": TPCH_SF1,
+            "table": "lineitem",
+            "synced": True,
+            "columns": None,
+        },
     ]
     calls = {"n": 0}
 
@@ -134,8 +157,8 @@ def test_information_schema_pagination_merges_pages(httpserver: HTTPServer, srv:
     httpserver.expect_request("/v1/information_schema").respond_with_handler(page)
 
     con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
-    names = con.list_tables(database=("c1", "pub"))
-    assert names == ["apple", "banana"]
+    names = con.list_tables(database=(TPCH_CONN, TPCH_SF1))
+    assert names == ["customer", "lineitem"]
     assert calls["n"] == 2
 
 
@@ -149,29 +172,47 @@ def test_table_not_found(httpserver: HTTPServer, srv: str):
         token="tok",
         workspace_id="ws",
         verify_ssl=False,
-        default_connection="cx",
-        default_schema="sx",
+        default_connection=TPCH_CONN,
+        default_schema=TPCH_SF1,
     )
     with pytest.raises(com.TableNotFound):
-        con.table("gone", database=("cx", "sx"))
+        con.table("gone", database=(TPCH_CONN, TPCH_SF1))
 
 
 def test_list_tables_regex_like(httpserver: HTTPServer, srv: str):
     httpserver.expect_request("/v1/connections").respond_with_json(
-        {"connections": [{"id": "c1", "name": "warehouse", "source_type": "postgres"}]}
+        {"connections": [{"id": TPCH_CONN, "name": "TPC-H SF1", "source_type": "duckdb"}]}
     )
     tbls = [
-        {"connection": "c1", "schema": "p", "table": "cust_a", "synced": True, "columns": None},
-        {"connection": "c1", "schema": "p", "table": "cust_b", "synced": True, "columns": None},
-        {"connection": "c1", "schema": "p", "table": "other", "synced": True, "columns": None},
+        {
+            "connection": TPCH_CONN,
+            "schema": TPCH_SF1,
+            "table": "customer",
+            "synced": True,
+            "columns": None,
+        },
+        {
+            "connection": TPCH_CONN,
+            "schema": TPCH_SF1,
+            "table": "lineitem",
+            "synced": True,
+            "columns": None,
+        },
+        {
+            "connection": TPCH_CONN,
+            "schema": TPCH_SF1,
+            "table": "nation",
+            "synced": True,
+            "columns": None,
+        },
     ]
     httpserver.expect_request("/v1/information_schema").respond_with_json(
         {"tables": tbls, "has_more": False, "next_cursor": None},
     )
 
     con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
-    out = con.list_tables(database=("c1", "p"), like=r"^cust_")
-    assert out == ["cust_a", "cust_b"]
+    out = con.list_tables(database=(TPCH_CONN, TPCH_SF1), like=r"^(customer|lineitem)$")
+    assert out == ["customer", "lineitem"]
 
 
 def test_ambiguous_default_connection(httpserver: HTTPServer, srv: str):
@@ -216,8 +257,8 @@ def test_x_session_header_on_query(httpserver: HTTPServer, srv: str):
         workspace_id="ws",
         session_id="sb_xyz",
         verify_ssl=False,
-        default_connection="c1",
-        default_schema="public",
+        default_connection=TPCH_CONN,
+        default_schema=TPCH_SF1,
     )
 
     pdf = con.execute(ibis.literal(0).name("n"))

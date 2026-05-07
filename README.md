@@ -129,7 +129,7 @@ uv sync
 export HOTDATA_TOKEN=...
 export HOTDATA_WORKSPACE_ID=...
 uv run python examples/01_catalog_introspection.py
-uv run python examples/02_execute_sql.py 'SELECT COUNT(*) AS n FROM conn.schema.table'
+uv run python examples/02_execute_sql.py 'SELECT COUNT(*) AS n FROM tpch.tpch_sf1.customer'
 uv run python examples/03_connect_via_url.py
 ```
 
