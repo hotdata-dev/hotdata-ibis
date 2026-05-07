@@ -120,6 +120,22 @@ uv run pytest
 
 Without uv, use `pip install -e .` and install dev tools separately (`pytest`, `pytest-httpserver`, `ruff`).
 
+## TPC-H in Hotdata
+
+Hotdata does not ship TPC-H as a single “upload this file” dataset. You expose the benchmark tables through a **connection** in your workspace, then query them like any other federated tables. See [Quick Start](https://www.hotdata.dev/docs/quick-start) (workspaces and connections) and [Data Sources](https://www.hotdata.dev/docs/data-sources) (supported engines).
+
+A practical approach is a **DuckDB** connection: in the [Hotdata app](https://app.hotdata.dev/), add DuckDB for your workspace, then run SQL against that connection (for example with `hotdata query '…' --workspace-id … --connection …` from the CLI) to install and generate data using DuckDB’s built-in TPC-H extension:
+
+```sql
+INSTALL tpch;
+LOAD tpch;
+CALL dbgen(sf = 1);
+```
+
+Details, cleanup between runs, and optional query harnesses are in the [DuckDB TPC-H extension](https://www.duckdb.org/docs/current/core_extensions/tpch.html) documentation. By default, `dbgen` creates the TPC-H tables in DuckDB’s default schema (often `main`).
+
+The examples in this repo assume federated names like **`tpch.tpch_sf1.customer`**: a connection whose id matches **`tpch`** (or is picked by the helper’s resolver) and a schema **`tpch_sf1`**. If your tables live in `main` instead, run the examples with `--default-schema main` and the correct `--default-connection`, or set **`HOTDATA_TPCH_RESOLVE=false`** and **`HOTDATA_DEFAULT_SCHEMA`** / **`HOTDATA_DEFAULT_CONNECTION`** (see `examples/_helpers.py`). Alternatively, create a `tpch_sf1` schema in DuckDB and move or recreate the generated tables there so the layout matches the defaults.
+
 ## Examples
 
 The `examples/` directory has small CLIs that assume TPC-H defaults (**`tpch` / `tpch_sf1`**
