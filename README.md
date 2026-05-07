@@ -6,11 +6,15 @@ Hotdata exposes `POST /v1/query`, optional asynchronous execution (`202` + `GET 
 
 ## Install
 
+**From PyPI** (pick your installer):
+
 ```bash
-python -m pip install "ibis-hotdata"
+uv pip install ibis-hotdata
+# or
+python -m pip install ibis-hotdata
 ```
 
-Use a virtual environment. The package pins **`ibis-framework>=10,<11`** to track the current Ibis major line.
+Use Python **3.10+**. This package pins **`ibis-framework>=10,<11`** to match the Ibis major line.
 
 ## Connect
 
@@ -92,11 +96,29 @@ Table creation/DML helpers, uploads, embeddings, indexes, dataset lifecycle—th
 
 ## Development
 
+This repo uses **[uv](https://docs.astral.sh/uv/)** for environments and **`uv.lock`**.
+
 ```bash
-python -m venv .venv && . .venv/bin/activate
-pip install -e '.[dev]'
-pytest
+uv sync               # editable project + dev group (pytest, pytest-httpserver, ruff)
+uv run pytest
+uv run ruff check src tests
 ```
+
+Optional Python pin:
+
+```bash
+uv python pin 3.12
+uv sync
+```
+
+CI-oriented checks:
+
+```bash
+uv sync --locked      # fail if uv.lock is out of date relative to pyproject.toml
+uv run pytest
+```
+
+Without uv, use `pip install -e .` and install dev tools separately (`pytest`, `pytest-httpserver`, `ruff`).
 
 Tests use **pytest-httpserver**; no workspace tokens are embedded in this repository.
 
