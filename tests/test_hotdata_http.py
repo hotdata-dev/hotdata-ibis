@@ -63,3 +63,54 @@ def test_sync_error_raises(httpserver: HTTPServer):
     with pytest.raises(HotdataAPIError):
         client.execute_query("select 1", prefer_async=False)
     client.close()
+
+
+def test_sync_200_pad_shorter_nullable_array(httpserver: HTTPServer):
+    body = {
+        "columns": ["a", "b", "c"],
+        "nullable": [False],
+        "rows": [[1, 2, 3]],
+        "row_count": 1,
+    }
+    httpserver.expect_oneshot_request("/v1/query", method="POST").respond_with_json(body)
+    client = HotdataClient(
+        api_url=httpserver.url_for("/").rstrip("/"),
+        token="t",
+        workspace_id="w",
+        verify_ssl=False,
+    )
+    out = client.execute_query("select 1", prefer_async=False)
+    assert len(out["nullable"]) == 3
+    assert out["nullable"][0] is False
+
+
+def test_async_query_run_failure(httpserver: HTTPServer):
+    httpserver.expect_oneshot_request("/v1/query", method="POST").respond_with_json(
+        {"query_run_id": "bad", "status": "accepted"},
+        status=202,
+    )
+    httpserver.expect_oneshot_request("/v1/query-runs/bad").respond_with_json(
+        {"status": "failed", "error_message": "boom", "id": "bad"}
+    )
+    client = HotdataClient(
+        api_url=httpserver.url_for("/").rstrip("/"),
+        token="t",
+        workspace_id="w",
+        verify_ssl=False,
+    )
+    with pytest.raises(HotdataAPIError, match="boom"):
+        client.execute_query("select junk", prefer_async=True, poll_interval_s=0, poll_timeout_s=2)
+    client.close()
+
+
+def test_get_json_raises_on_http_error(httpserver: HTTPServer):
+    httpserver.expect_request("/v1/connections").respond_with_data("nope", status=503)
+    client = HotdataClient(
+        api_url=httpserver.url_for("/").rstrip("/"),
+        token="t",
+        workspace_id="w",
+        verify_ssl=False,
+    )
+    with pytest.raises(HotdataAPIError):
+        client.get_json("/v1/connections")
+    client.close()
