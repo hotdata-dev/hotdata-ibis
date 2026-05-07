@@ -30,9 +30,12 @@ class HotdataAPIError(Exception):
 
 
 def _from_api_exception(exc: ApiException) -> HotdataAPIError:
+    body = exc.body
+    if isinstance(body, (bytes, bytearray)):
+        body = body.decode("utf-8", errors="replace")
     msg = f"Hotdata API error: {exc.reason}"
-    if exc.body:
-        msg = f"{msg} {exc.body}"
+    if body:
+        msg = f"{msg} {body}"
     return HotdataAPIError(msg.strip(), status_code=exc.status, body=exc.body)
 
 
@@ -66,7 +69,14 @@ class HotdataClient:
         self._datasets = DatasetsApi(self._client)
 
     def close(self) -> None:
-        return
+        client = self._client
+        close_fn = getattr(client, "close", None)
+        if callable(close_fn):
+            close_fn()
+            return
+        pool = getattr(getattr(client, "rest_client", None), "pool_manager", None)
+        if pool is not None:
+            pool.clear()
 
     def _safe_call(self, fn: Any, /, *args: Any, **kwargs: Any) -> Any:
         try:

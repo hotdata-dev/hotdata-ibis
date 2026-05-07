@@ -1,6 +1,6 @@
 # ibis-hotdata
 
-Experimental [Ibis](https://ibis-project.org/) backend for [Hotdata](https://www.hotdata.dev/docs/api-reference): compile expressions with Ibis, run federated SQL over the Hotdata API. REST calls use the official **[hotdata](https://github.com/hotdata-dev/sdk-python)** Python SDK; examples still use **httpx** for a few direct reads.
+Experimental [Ibis](https://ibis-project.org/) backend for [Hotdata](https://www.hotdata.dev/docs/api-reference): compile expressions with Ibis, run federated SQL over the Hotdata API. REST calls use the official **[hotdata](https://github.com/hotdata-dev/sdk-python)** Python SDK. Repo examples use **httpx** (listed under the **dev** dependency group).
 
 **Requirements:** Python 3.10+, **ibis-framework** 10.x, **hotdata** ≥0.1.
 
@@ -50,12 +50,12 @@ con = ibis.connect(
 ## Development
 
 ```bash
-uv sync
+uv sync --group dev   # pytest, ruff, httpx (for examples)
 uv run pytest
 uv run ruff check src tests examples
 ```
 
-Lockfile CI: `uv sync --locked && uv run pytest`.
+Lockfile CI: `uv sync --locked --group dev && uv run pytest`.
 
 ## TPC-H for the examples
 
@@ -66,7 +66,7 @@ Examples assume something like **`tpch.tpch_sf1.customer`**. Provision TPC-H in 
 Needs `HOTDATA_TOKEN` and `HOTDATA_WORKSPACE_ID`.
 
 ```bash
-uv sync
+uv sync --group dev
 export HOTDATA_TOKEN=…
 export HOTDATA_WORKSPACE_ID=…
 uv run python examples/01_catalog_introspection.py
