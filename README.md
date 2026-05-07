@@ -122,7 +122,10 @@ Without uv, use `pip install -e .` and install dev tools separately (`pytest`, `
 
 ## Examples
 
-The `examples/` directory has small CLIs that exercise a real workspace. Set credentials in the environment (do not commit secrets):
+The `examples/` directory has small CLIs that assume TPC-H defaults (**`tpch` / `tpch_sf1`**
+for REST metadata, aligning with federation SQL **`tpch.tpch_sf1.*`**). Helpers resolve the
+friendly labels to Hotdata connection ids when possible (`examples/_helpers.py`). Override
+via `--default-connection`, `--default-schema`, or **`HOTDATA_DEFAULT_*`**.
 
 ```bash
 uv sync

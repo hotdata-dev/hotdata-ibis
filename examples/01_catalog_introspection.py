@@ -2,11 +2,10 @@
 """
 Inspect Hotdata catalogs (connections), databases (schemas), and tables.
 
-From the repo root, after uv sync::
-
-    HOTDATA_TOKEN=... HOTDATA_WORKSPACE_ID=... uv run python examples/01_catalog_introspection.py
-
-Optional overrides: ``--catalog``, ``--schema`` (remote schema name), ``--table``.
+On startup, scripts call ``normalize_tpch_defaults`` in ``_helpers``: the literal defaults
+``tpch`` / ``tpch_sf1`` are mapped to REST connection ids via ``GET /v1/connections`` and a
+preference for catalogs that expose the ``tpch_sf1`` schema. Override with ``HOTDATA_DEFAULT_*``
+or ``HOTDATA_TPCH_*`` env vars documented in ``examples/_helpers.py``.
 """
 
 from __future__ import annotations
@@ -20,6 +19,7 @@ sys.path.insert(0, str(_examples))
 
 import ibis
 
+from _helpers import DEFAULT_TPCH_SCHEMA, DEFAULT_TPCH_CONNECTION
 from _helpers import connect_kwargs, parsed_args, parser
 
 _argp = parser("Inspect Hotdata via Ibis catalogs / schemas / tables.")
@@ -27,19 +27,20 @@ _argp.add_argument(
     "--catalog",
     dest="pick_catalog",
     default=os.environ.get("HOTDATA_PICK_CONNECTION") or None,
-    help="Connection id to drill into (default: inferred or first catalog)",
+    help=f"Ibis catalog (= connection id) to drill into. Default tries {DEFAULT_TPCH_CONNECTION!r}"
+    " from connect (--default-connection) then workspace order.",
 )
 _argp.add_argument(
     "--schema",
     dest="pick_schema",
     default=os.environ.get("HOTDATA_PICK_SCHEMA") or None,
-    help="Remote schema / Ibis database to list tables",
+    help=f"Remote schema / Ibis database (default tries {DEFAULT_TPCH_SCHEMA!r}).",
 )
 _argp.add_argument(
     "--table",
     dest="pick_table",
     default=os.environ.get("HOTDATA_PICK_TABLE") or None,
-    help="Print Ibis schema for this table (default: first listed table)",
+    help="Print Ibis schema for this table (default: first listed table; use ``customer`` for TPC-H).",
 )
 
 _ns = parsed_args(_argp)
@@ -58,7 +59,7 @@ def main() -> None:
         picked = cats[0]
 
     schemas = con.list_databases(catalog=picked)
-    print(f"schemas under {picked !r} (Ibis databases):", schemas)
+    print(f"schemas under {picked!r} (Ibis databases):", schemas)
     if not schemas:
         return
 
@@ -75,7 +76,12 @@ def main() -> None:
     if not tables:
         return
 
-    tbl_name = _ns.pick_table or tables[0]
+    if _ns.pick_table:
+        tbl_name = _ns.pick_table
+    elif "customer" in tables:
+        tbl_name = "customer"
+    else:
+        tbl_name = tables[0]
     if tbl_name not in tables:
         print(f"Table {tbl_name!r} not in listing; skipping schema print.")
         return
