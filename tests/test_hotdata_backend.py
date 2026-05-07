@@ -144,9 +144,21 @@ def test_information_schema_pagination_merges_pages(httpserver: HTTPServer, srv:
     def page(req: Request) -> Response:
         calls["n"] += 1
         if "cursor=page2" not in req.query_string.decode():
-            payload = {"tables": rows_a, "has_more": True, "next_cursor": "page2"}
+            payload = {
+                "count": 1,
+                "has_more": True,
+                "limit": 500,
+                "next_cursor": "page2",
+                "tables": rows_a,
+            }
         else:
-            payload = {"tables": rows_b, "has_more": False, "next_cursor": None}
+            payload = {
+                "count": 1,
+                "has_more": False,
+                "limit": 500,
+                "next_cursor": None,
+                "tables": rows_b,
+            }
         return Response(
             json.dumps(payload),
             status=200,
@@ -164,7 +176,7 @@ def test_information_schema_pagination_merges_pages(httpserver: HTTPServer, srv:
 
 def test_table_not_found(httpserver: HTTPServer, srv: str):
     httpserver.expect_request("/v1/information_schema").respond_with_json(
-        {"tables": [], "has_more": False, "next_cursor": None},
+        {"count": 0, "tables": [], "has_more": False, "next_cursor": None, "limit": 500},
     )
 
     con = ibis.hotdata.connect(
@@ -207,7 +219,13 @@ def test_list_tables_regex_like(httpserver: HTTPServer, srv: str):
         },
     ]
     httpserver.expect_request("/v1/information_schema").respond_with_json(
-        {"tables": tbls, "has_more": False, "next_cursor": None},
+        {
+            "count": 3,
+            "tables": tbls,
+            "has_more": False,
+            "next_cursor": None,
+            "limit": 500,
+        },
     )
 
     con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)

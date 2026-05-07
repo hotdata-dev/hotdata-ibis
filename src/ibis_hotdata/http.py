@@ -1,4 +1,4 @@
-"""HTTP client for the Hotdata REST API."""
+"""HTTP access to Hotdata via the official ``hotdata`` Python SDK (OpenAPI client)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,20 @@ import time
 from collections.abc import Mapping
 from typing import Any, MutableMapping
 
-import httpx
+from hotdata import ApiClient, Configuration
+from hotdata.api import (
+    ConnectionsApi,
+    DatasetsApi,
+    InformationSchemaApi,
+    QueryApi,
+    QueryRunsApi,
+    ResultsApi,
+    UploadsApi,
+)
+from hotdata.exceptions import ApiException
+from hotdata.models import CreateDatasetRequest, DatasetSource, QueryRequest, UploadDatasetSource
+from hotdata.models.async_query_response import AsyncQueryResponse
+from hotdata.models.query_response import QueryResponse
 
 
 class HotdataAPIError(Exception):
@@ -16,8 +29,18 @@ class HotdataAPIError(Exception):
         self.body = body
 
 
+def _from_api_exception(exc: ApiException) -> HotdataAPIError:
+    body = exc.body
+    if isinstance(body, (bytes, bytearray)):
+        body = body.decode("utf-8", errors="replace")
+    msg = f"Hotdata API error: {exc.reason}"
+    if body:
+        msg = f"{msg} {body}"
+    return HotdataAPIError(msg.strip(), status_code=exc.status, body=exc.body)
+
+
 class HotdataClient:
-    """Thin synchronous HTTP wrapper for `/v1/*` endpoints used by the Ibis backend."""
+    """Thin wrapper around the SDK used by the Ibis backend."""
 
     def __init__(
         self,
@@ -29,45 +52,55 @@ class HotdataClient:
         timeout: float = 120.0,
         verify_ssl: bool | str = True,
     ) -> None:
-        base = api_url.rstrip("/")
-        headers: dict[str, str] = {
-            "Authorization": f"Bearer {token}",
-            "X-Workspace-Id": workspace_id,
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
-        if session_id:
-            headers["X-Session-Id"] = session_id
-        self._client = httpx.Client(base_url=base, headers=headers, timeout=timeout, verify=verify_ssl)
+        host = api_url.rstrip("/")
+        conf = Configuration(host=host, api_key=token, workspace_id=workspace_id, session_id=session_id)
+        if verify_ssl is False:
+            conf.verify_ssl = False
+        elif isinstance(verify_ssl, str):
+            conf.ssl_ca_cert = verify_ssl
+        self._timeout = timeout
+        self._client = ApiClient(conf)
+        self._query = QueryApi(self._client)
+        self._query_runs = QueryRunsApi(self._client)
+        self._results = ResultsApi(self._client)
+        self._connections = ConnectionsApi(self._client)
+        self._information_schema = InformationSchemaApi(self._client)
+        self._uploads = UploadsApi(self._client)
+        self._datasets = DatasetsApi(self._client)
 
     def close(self) -> None:
-        self._client.close()
+        client = self._client
+        close_fn = getattr(client, "close", None)
+        if callable(close_fn):
+            close_fn()
+            return
+        pool = getattr(getattr(client, "rest_client", None), "pool_manager", None)
+        if pool is not None:
+            pool.clear()
 
-    def request(
-        self,
-        method: str,
-        path: str,
-        *,
-        params: Mapping[str, Any] | None = None,
-        json: Any = None,
-    ) -> httpx.Response:
-        r = self._client.request(method, path, params=params, json=json)
-        return r
+    def _safe_call(self, fn: Any, /, *args: Any, **kwargs: Any) -> Any:
+        try:
+            return fn(*args, _request_timeout=self._timeout, **kwargs)
+        except ApiException as exc:
+            raise _from_api_exception(exc) from exc
 
-    def get_json(
-        self,
-        path: str,
-        *,
-        params: Mapping[str, Any] | None = None,
-    ) -> Any:
-        r = self.request("GET", path, params=params)
-        if r.is_error:
-            raise HotdataAPIError(
-                f"Hotdata GET {path} failed: {r.text}",
-                status_code=r.status_code,
-                body=r.text,
-            )
-        return r.json()
+    def list_connections(self) -> dict[str, Any]:
+        """GET ``/v1/connections``."""
+        out = self._safe_call(self._connections.list_connections)
+        return out.model_dump(by_alias=True, mode="json")
+
+    def get_information_schema(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        """GET ``/v1/information_schema`` — ``params`` uses REST names (``schema`` not ``var_schema``)."""
+        out = self._safe_call(
+            self._information_schema.information_schema,
+            connection_id=params.get("connection_id"),
+            var_schema=params.get("schema"),
+            table=params.get("table"),
+            include_columns=params.get("include_columns"),
+            limit=params.get("limit"),
+            cursor=params.get("cursor"),
+        )
+        return out.model_dump(by_alias=True, mode="json")
 
     def execute_query(
         self,
@@ -78,25 +111,20 @@ class HotdataClient:
         poll_interval_s: float = 0.25,
         poll_timeout_s: float = 600.0,
     ) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "sql": sql,
-            "async": prefer_async,
-            "async_after_ms": async_after_ms,
-        }
-        r = self.request("POST", "/v1/query", json=payload)
-        if r.status_code == 200:
-            return self._normalize_result_payload(r.json())
-        if r.status_code == 202:
-            body = r.json()
-            query_run_id = body["query_run_id"]
+        req = QueryRequest(sql=sql, var_async=prefer_async, async_after_ms=async_after_ms)
+        out = self._safe_call(self._query.query, req)
+        if isinstance(out, QueryResponse):
+            return self._normalize_result_payload(out.model_dump(by_alias=True))
+        if isinstance(out, AsyncQueryResponse):
+            query_run_id = out.query_run_id
             deadline = time.monotonic() + poll_timeout_s
             while time.monotonic() < deadline:
-                qr = self.get_json(f"/v1/query-runs/{query_run_id}")
-                status = qr.get("status")
+                qr = self._safe_call(self._query_runs.get_query_run, query_run_id)
+                status = qr.status
                 if status == "failed":
-                    raise HotdataAPIError(qr.get("error_message") or "Query run failed")
+                    raise HotdataAPIError(qr.error_message or "Query run failed")
                 if status == "succeeded":
-                    result_id = qr.get("result_id")
+                    result_id = qr.result_id
                     if result_id is None:
                         raise HotdataAPIError("succeeded query run missing result_id")
                     return self._poll_result_ready(
@@ -104,23 +132,39 @@ class HotdataClient:
                     )
                 time.sleep(poll_interval_s)
             raise HotdataAPIError("Timeout waiting for asynchronous query")
+        raise HotdataAPIError("Unexpected query response type")
 
-        raise HotdataAPIError(
-            f"Hotdata POST /v1/query failed: {r.text}",
-            status_code=r.status_code,
-            body=r.text,
-        )
+    def upload_file(self, data: bytes) -> dict[str, Any]:
+        resp = self._safe_call(self._uploads.upload_file, data)
+        return resp.model_dump(by_alias=True, mode="json")
+
+    def create_dataset_from_upload(
+        self,
+        *,
+        upload_id: str,
+        label: str,
+        table_name: str | None = None,
+        file_format: str = "csv",
+    ) -> dict[str, Any]:
+        src = DatasetSource(UploadDatasetSource(upload_id=upload_id, format=file_format))
+        fields: dict[str, Any] = {"label": label, "source": src}
+        if table_name is not None:
+            fields["table_name"] = table_name
+        req = CreateDatasetRequest(**fields)
+        resp = self._safe_call(self._datasets.create_dataset, req)
+        return resp.model_dump(by_alias=True, mode="json")
 
     def _poll_result_ready(
         self, result_id: str, *, deadline: float, poll_interval_s: float
     ) -> dict[str, Any]:
         while time.monotonic() < deadline:
-            res = self.get_json(f"/v1/results/{result_id}")
-            st = res.get("status")
+            res = self._safe_call(self._results.get_result, result_id)
+            d = res.model_dump(by_alias=True)
+            st = d.get("status")
             if st == "failed":
-                raise HotdataAPIError(res.get("error_message") or "Result failed")
-            if st == "ready" or (res.get("rows") is not None and res.get("columns")):
-                return self._normalize_result_payload(res)
+                raise HotdataAPIError(d.get("error_message") or "Result failed")
+            if st == "ready" or (d.get("rows") is not None and d.get("columns")):
+                return self._normalize_result_payload(d)
             time.sleep(poll_interval_s)
         raise HotdataAPIError("Timeout waiting for query result payload")
 
