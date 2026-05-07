@@ -101,7 +101,7 @@ This repo uses **[uv](https://docs.astral.sh/uv/)** for environments and **`uv.l
 ```bash
 uv sync               # editable project + dev group (pytest, pytest-httpserver, ruff)
 uv run pytest
-uv run ruff check src tests
+uv run ruff check src tests examples
 ```
 
 Optional Python pin:
@@ -119,6 +119,21 @@ uv run pytest
 ```
 
 Without uv, use `pip install -e .` and install dev tools separately (`pytest`, `pytest-httpserver`, `ruff`).
+
+## Examples
+
+The `examples/` directory has small CLIs that exercise a real workspace. Set credentials in the environment (do not commit secrets):
+
+```bash
+uv sync
+export HOTDATA_TOKEN=...
+export HOTDATA_WORKSPACE_ID=...
+uv run python examples/01_catalog_introspection.py
+uv run python examples/02_execute_sql.py 'SELECT COUNT(*) AS n FROM conn.schema.table'
+uv run python examples/03_connect_via_url.py
+```
+
+See each script's docstring and `examples/_helpers.py` for flags (`--catalog`, `--schema`, `--prefer-async`, `--insecure`, …).
 
 Tests use **pytest-httpserver**; no workspace tokens are embedded in this repository.
 
