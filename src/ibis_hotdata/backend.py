@@ -16,14 +16,12 @@ See the README for dialect and typing limitations.
 from __future__ import annotations
 
 import contextlib
-import urllib.parse
 from collections.abc import Iterable, Mapping
 from functools import cached_property
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as pkg_version
 from typing import TYPE_CHECKING, Any
-from urllib.parse import ParseResult, unquote_plus
-
-import sqlglot as sg
-import sqlglot.expressions as sge
+from urllib.parse import ParseResult, parse_qsl, unquote_plus
 
 import ibis.backends.sql.compilers as sc
 import ibis.common.exceptions as com
@@ -31,12 +29,26 @@ import ibis.expr.datatypes as dt
 import ibis.expr.operations as ops
 import ibis.expr.schema as sch
 import ibis.expr.types as ir
-
-from ibis.backends import CanListCatalog, CanListDatabase, HasCurrentCatalog, HasCurrentDatabase, NoExampleLoader
+import sqlglot as sg
+import sqlglot.expressions as sge
+from ibis.backends import (
+    CanListCatalog,
+    CanListDatabase,
+    HasCurrentCatalog,
+    HasCurrentDatabase,
+    NoExampleLoader,
+)
 from ibis.backends.sql import SQLBackend
 
 from ibis_hotdata.http import HotdataAPIError, HotdataClient
 from ibis_hotdata.types import dtype_from_hotdata_sql_type, dtype_from_json_value
+
+_INFORMATION_SCHEMA_PAGE_SIZE = 500
+
+
+def _ibis_err_from_hotdata(exc: HotdataAPIError) -> com.IbisError:
+    return com.IbisError(str(exc))
+
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -98,13 +110,15 @@ class Backend(
           ``default_schema``, ``prefer_async``.
         * If ``token`` is omitted, ``urlparse`` password (`user:TOKEN@`) is accepted.
         """
-        q = dict(urllib.parse.parse_qsl(url.query, keep_blank_values=True))
+        q = dict(parse_qsl(url.query, keep_blank_values=True))
         q.update(kwarg_overrides)
 
         netloc = url.netloc
         path_prefix = url.path.rstrip("/")
         if not netloc:
-            raise com.IbisError("hotdata:// URL requires a network location, e.g. hotdata://api.hotdata.dev/")
+            raise com.IbisError(
+                "hotdata:// URL requires a network location, e.g. hotdata://api.hotdata.dev/"
+            )
 
         verify = q.pop("verify_ssl", None)
         if verify is None:
@@ -117,9 +131,7 @@ class Backend(
         timeout = float(q.pop("timeout", "120"))
         api_url = q.pop("api_url", None) or ("https://" + netloc + path_prefix)
 
-        token = q.pop("token", None) or (
-            unquote_plus(url.password) if url.password else None
-        )
+        token = q.pop("token", None) or (unquote_plus(url.password) if url.password else None)
         workspace_id = q.pop("workspace_id", None)
 
         prefer_async_s = q.pop("prefer_async", "false")
@@ -236,7 +248,9 @@ class Backend(
         )
         if self._default_schema is not None:
             if self._default_schema not in schemas:
-                raise com.IbisInputError(f"Unknown schema {self._default_schema!r} for connection {connection_id!r}")
+                raise com.IbisInputError(
+                    f"Unknown schema {self._default_schema!r} for connection {connection_id!r}"
+                )
             return self._default_schema
         if len(schemas) == 1:
             self._default_schema = schemas[0]
@@ -287,7 +301,9 @@ class Backend(
         schemas = sorted(
             {
                 row["schema"]
-                for row in self._iterate_information_schema({"connection_id": conn}, include_columns=False)
+                for row in self._iterate_information_schema(
+                    {"connection_id": conn}, include_columns=False
+                )
             }
         )
         return self._filter_with_like(list(schemas), like)
@@ -308,7 +324,10 @@ class Backend(
             params["schema"] = schema_part
 
         tables = sorted(
-            {row["table"] for row in self._iterate_information_schema(params, include_columns=False)}
+            {
+                row["table"]
+                for row in self._iterate_information_schema(params, include_columns=False)
+            }
         )
         return self._filter_with_like(tables, like)
 
@@ -318,7 +337,7 @@ class Backend(
         cursor: str | None = None
         while True:
             params: dict[str, Any] = dict(filters)
-            params["limit"] = 500
+            params["limit"] = _INFORMATION_SCHEMA_PAGE_SIZE
             params["include_columns"] = include_columns
             if cursor:
                 params["cursor"] = cursor
@@ -372,7 +391,7 @@ class Backend(
                 poll_timeout_s=self._poll_timeout_s,
             )
         except HotdataAPIError as exc:
-            raise com.IbisError(str(exc)) from exc
+            raise _ibis_err_from_hotdata(exc) from exc
 
         cols = data["columns"]
         nulls = data["nullable"]
@@ -404,7 +423,7 @@ class Backend(
                 poll_timeout_s=self._poll_timeout_s,
             )
         except HotdataAPIError as exc:
-            raise com.IbisError(str(exc)) from exc
+            raise _ibis_err_from_hotdata(exc) from exc
 
         cur = HotdataRowsCursor(payload["rows"])
         try:
@@ -414,7 +433,6 @@ class Backend(
 
     def _fetch_from_cursor(self, cursor, schema: sch.Schema) -> pd.DataFrame:
         import pandas as pd
-
         from ibis.formats.pandas import PandasData
 
         try:
@@ -430,7 +448,7 @@ class Backend(
         try:
             return self._http.upload_file(data)
         except HotdataAPIError as exc:
-            raise com.IbisError(str(exc)) from exc
+            raise _ibis_err_from_hotdata(exc) from exc
 
     def create_dataset_from_upload(
         self,
@@ -453,7 +471,7 @@ class Backend(
                 file_format=file_format,
             )
         except HotdataAPIError as exc:
-            raise com.IbisError(str(exc)) from exc
+            raise _ibis_err_from_hotdata(exc) from exc
 
     def create_table(self, *_args: Any, **_kwargs: Any) -> ir.Table:
         raise NotImplementedError(
@@ -469,4 +487,8 @@ class Backend(
 
     @cached_property
     def version(self) -> str:
-        return "Hotdata REST API (/v1/query)"
+        try:
+            v = pkg_version("ibis-hotdata")
+        except PackageNotFoundError:
+            v = "0.0.0"
+        return f"ibis-hotdata {v} (Hotdata /v1/query)"

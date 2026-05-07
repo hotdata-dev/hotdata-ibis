@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping
-from typing import Any, MutableMapping
+from collections.abc import Callable, Mapping
+from typing import Any, MutableMapping, TypeVar
 
 from hotdata import ApiClient, Configuration
 from hotdata.api import (
@@ -20,6 +20,15 @@ from hotdata.exceptions import ApiException
 from hotdata.models import CreateDatasetRequest, DatasetSource, QueryRequest, UploadDatasetSource
 from hotdata.models.async_query_response import AsyncQueryResponse
 from hotdata.models.query_response import QueryResponse
+
+T = TypeVar("T")
+
+
+def _sleep_until(deadline: float, interval: float) -> None:
+    """Sleep up to ``interval`` s but never past ``deadline`` (cleaner timeout behavior)."""
+    remaining = deadline - time.monotonic()
+    if remaining > 0:
+        time.sleep(min(interval, remaining))
 
 
 class HotdataAPIError(Exception):
@@ -53,7 +62,9 @@ class HotdataClient:
         verify_ssl: bool | str = True,
     ) -> None:
         host = api_url.rstrip("/")
-        conf = Configuration(host=host, api_key=token, workspace_id=workspace_id, session_id=session_id)
+        conf = Configuration(
+            host=host, api_key=token, workspace_id=workspace_id, session_id=session_id
+        )
         if verify_ssl is False:
             conf.verify_ssl = False
         elif isinstance(verify_ssl, str):
@@ -78,7 +89,7 @@ class HotdataClient:
         if pool is not None:
             pool.clear()
 
-    def _safe_call(self, fn: Any, /, *args: Any, **kwargs: Any) -> Any:
+    def _safe_call(self, fn: Callable[..., T], /, *args: Any, **kwargs: Any) -> T:
         try:
             return fn(*args, _request_timeout=self._timeout, **kwargs)
         except ApiException as exc:
@@ -130,7 +141,7 @@ class HotdataClient:
                     return self._poll_result_ready(
                         result_id, deadline=deadline, poll_interval_s=poll_interval_s
                     )
-                time.sleep(poll_interval_s)
+                _sleep_until(deadline, poll_interval_s)
             raise HotdataAPIError("Timeout waiting for asynchronous query")
         raise HotdataAPIError("Unexpected query response type")
 
@@ -165,12 +176,13 @@ class HotdataClient:
                 raise HotdataAPIError(d.get("error_message") or "Result failed")
             if st == "ready" or (d.get("rows") is not None and d.get("columns")):
                 return self._normalize_result_payload(d)
-            time.sleep(poll_interval_s)
+            _sleep_until(deadline, poll_interval_s)
         raise HotdataAPIError("Timeout waiting for query result payload")
 
     @staticmethod
     def _normalize_result_payload(data: MutableMapping[str, Any]) -> dict[str, Any]:
-        columns = list(data["columns"])
+        raw = data.get("columns")
+        columns = list(raw) if raw is not None else []
         nullable = list(data.get("nullable") or [])
         if len(nullable) < len(columns):
             nullable.extend([True] * (len(columns) - len(nullable)))

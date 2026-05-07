@@ -39,5 +39,3 @@ def dtype_from_json_value(value: Any) -> dt.DataType | None:
         return dt.Array(dt.JSON())
 
     return dt.String()
-
-
