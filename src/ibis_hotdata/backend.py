@@ -176,7 +176,7 @@ class Backend(
         timeout
             HTTP timeout in seconds (per request).
         verify_ssl
-            Passed to ``httpx`` (boolean or path to a CA bundle).
+            Passed through to the Hotdata SDK configuration (boolean or path to a CA bundle).
         default_connection
             Optional default **catalog** (Hotdata connection id). If omitted and the
             workspace exposes exactly one connection, it is chosen automatically;
@@ -270,7 +270,7 @@ class Backend(
         return sg_cat, sg_db
 
     def _connection_ids(self) -> list[str]:
-        data = self._http.get_json("/v1/connections")
+        data = self._http.list_connections()
         return [c["id"] for c in data["connections"]]
 
     def list_catalogs(self, *, like: str | None = None) -> list[str]:
@@ -322,7 +322,7 @@ class Backend(
             params["include_columns"] = include_columns
             if cursor:
                 params["cursor"] = cursor
-            chunk = self._http.get_json("/v1/information_schema", params=params)
+            chunk = self._http.get_information_schema(params)
             yield from chunk["tables"]
             if not chunk.get("has_more"):
                 break
@@ -425,8 +425,41 @@ class Backend(
         df = PandasData.convert_table(df, schema)
         return df
 
+    def upload_file(self, data: bytes) -> dict[str, Any]:
+        """POST ``/v1/files``; returns the upload record (use ``id`` with :meth:`create_dataset_from_upload`)."""
+        try:
+            return self._http.upload_file(data)
+        except HotdataAPIError as exc:
+            raise com.IbisError(str(exc)) from exc
+
+    def create_dataset_from_upload(
+        self,
+        upload_id: str,
+        label: str,
+        *,
+        table_name: str | None = None,
+        file_format: str = "csv",
+    ) -> dict[str, Any]:
+        """POST ``/v1/datasets`` with an upload source—materializes a queryable dataset table.
+
+        The response includes ``schema_name`` and ``table_name``. Reference the table in SQL as
+        ``datasets.<schema_name>.<table_name>`` (see Hotdata ``datasets`` documentation).
+        """
+        try:
+            return self._http.create_dataset_from_upload(
+                upload_id=upload_id,
+                label=label,
+                table_name=table_name,
+                file_format=file_format,
+            )
+        except HotdataAPIError as exc:
+            raise com.IbisError(str(exc)) from exc
+
     def create_table(self, *_args: Any, **_kwargs: Any) -> ir.Table:
-        raise NotImplementedError("Hotdata backend does not implement create_table in v1.")
+        raise NotImplementedError(
+            "Hotdata does not implement Ibis create_table in v1; use upload_file + "
+            "create_dataset_from_upload, then SQL or con.table with the returned names."
+        )
 
     def drop_table(self, *_args: Any, **_kwargs: Any) -> None:
         raise NotImplementedError("Hotdata backend does not implement drop_table in v1.")

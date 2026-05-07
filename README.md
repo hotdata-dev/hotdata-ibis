@@ -2,7 +2,7 @@
 
 Experimental [Ibis](https://ibis-project.org/) backend for [Hotdata](https://www.hotdata.dev/docs/api-reference)—federated, Postgres-compatible SQL executed over HTTPS.
 
-Hotdata exposes `POST /v1/query`, optional asynchronous execution (`202` + `GET /v1/query-runs/{id}` + `GET /v1/results/{id}`), and catalog metadata via `GET /v1/information_schema`. This package forwards compiled Ibis SQL through those endpoints.
+Hotdata exposes `POST /v1/query`, optional asynchronous execution (`202` + `GET /v1/query-runs/{id}` + `GET /v1/results/{id}`), and catalog metadata via `GET /v1/information_schema`. HTTP access uses the official [`hotdata`](https://github.com/hotdata-dev/sdk-python) OpenAPI Python client; this package wires it for Ibis compilation and execution.
 
 ## Install
 
@@ -14,7 +14,7 @@ uv pip install ibis-hotdata
 python -m pip install ibis-hotdata
 ```
 
-Use Python **3.10+**. This package pins **`ibis-framework>=10,<11`** to match the Ibis major line.
+Use Python **3.10+**. This package pins **`ibis-framework>=10,<11`** and depends on the **[`hotdata`](https://pypi.org/project/hotdata/)** SDK (**≥0.1**) for typed REST calls.
 
 ## Connect
 
@@ -92,7 +92,7 @@ Results are fetched into **pandas** by default (`execute`), matching core SQL ba
 
 ## Out of scope (v1)
 
-Table creation/DML helpers, uploads, embeddings, indexes, dataset lifecycle—these remain unimplemented unless you drive them explicitly with `.sql(...)`.
+Ibis **`create_table`** (DML helpers), embeddings, indexes—these remain unimplemented in v1. For **file uploads**, `HotdataClient.upload_file` + `create_dataset_from_upload` call [`POST /v1/files`](https://www.hotdata.dev/docs/api-reference) then [`POST /v1/datasets`](https://www.hotdata.dev/docs/api-reference) with `source.type: upload`; query the table as `datasets.<schema>.<table>` (see Hotdata docs). Alternatively use `.sql(...)`.
 
 ## Development
 
@@ -158,6 +158,7 @@ Tests use **pytest-httpserver**; no workspace tokens are embedded in this reposi
 
 ## References
 
+- [Hotdata Python SDK](https://github.com/hotdata-dev/sdk-python) (OpenAPI-generated client)
 - [Hotdata API reference](https://www.hotdata.dev/docs/api-reference)
 - [Hotdata SQL reference](https://www.hotdata.dev/docs/sql)
 - [Ibis](https://ibis-project.org/)
