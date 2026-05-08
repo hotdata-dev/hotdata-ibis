@@ -27,7 +27,8 @@ con = ibis.hotdata.connect(
     timeout=120.0,
     default_connection=None,  # Hotdata connection id → Ibis catalog
     default_schema=None,      # remote schema → Ibis database
-    prefer_async=False,
+    poll_interval_s=0.25,
+    poll_timeout_s=600.0,
 )
 ```
 
@@ -41,7 +42,7 @@ con = ibis.connect(
 
 **Mapping:** Ibis **catalog** = Hotdata connection id; **database** = remote schema; **table** = table name. SQL references look like `connection.schema.table`. With a single connection and schema, defaults are inferred; otherwise set `default_connection` / `default_schema` or qualify `con.table(..., database=(conn_id, schema))`.
 
-**Execution:** SQL is compiled with Ibis’s **Postgres** SQLGlot compiler. The client uses `POST /v1/query`; with `prefer_async=True` it follows `202` and polls query-run and result endpoints until rows are ready. Tuning: `poll_interval_s`, `poll_timeout_s` on `connect()`.
+**Execution:** SQL is compiled with Ibis’s **Postgres** SQLGlot compiler. The client submits queries asynchronously with `POST /v1/query`, polls `GET /v1/query-runs/{id}`, then downloads ready results as Arrow IPC from `GET /v1/results/{id}`. Tuning: `poll_interval_s`, `poll_timeout_s` on `connect()`.
 
 **Types:** Typed tables come from Hotdata’s information schema. `con.sql(...)` types are inferred from a small preview query; see [Hotdata SQL](https://www.hotdata.dev/docs/sql) for server behavior.
 

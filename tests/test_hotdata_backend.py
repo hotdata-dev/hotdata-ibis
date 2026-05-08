@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import io
 import json
 
 import ibis
 import ibis.common.exceptions as com
+import pyarrow as pa
+import pyarrow.ipc as ipc
 import pytest
 from werkzeug.wrappers import Request, Response
 
@@ -25,37 +28,52 @@ TPCH_CUSTOMER_COLS = [
 ]
 
 
+def arrow_stream(table: pa.Table) -> bytes:
+    sink = io.BytesIO()
+    with ipc.new_stream(sink, table.schema) as writer:
+        writer.write_table(table)
+    return sink.getvalue()
+
+
 def test_connect_via_url(httpserver: HTTPServer, srv: str):
-    url = (
-        f"hotdata://127.0.0.1:{httpserver.port}"
-        "?token=tok&workspace_id=ws_demo&verify_ssl=false"
-    )
+    url = f"hotdata://127.0.0.1:{httpserver.port}?token=tok&workspace_id=ws_demo&verify_ssl=false"
     con = ibis.connect(url)
     assert getattr(con, "name", "") == "hotdata"
 
 
 def test_connect_via_url_password_token(httpserver: HTTPServer):
     token = "secret_pass"
-    url = (
-        f"hotdata://u:{token}@127.0.0.1:{httpserver.port}"
-        "/?workspace_id=ws_pw&verify_ssl=false"
-    )
+    url = f"hotdata://u:{token}@127.0.0.1:{httpserver.port}/?workspace_id=ws_pw&verify_ssl=false"
     con = ibis.connect(url)
     assert getattr(con, "name", "") == "hotdata"
 
 
 def test_sql_execution(httpserver: HTTPServer, srv: str):
-    body = {
-        "columns": ["x"],
-        "nullable": [False],
-        "rows": [[1]],
-        "row_count": 1,
-        "execution_time_ms": 3,
-        "query_run_id": "qr-sync",
-        "result_id": None,
-        "warning": None,
-    }
-    httpserver.expect_request("/v1/query", method="POST").respond_with_json(body)
+    httpserver.expect_request("/v1/query", method="POST").respond_with_json(
+        {
+            "query_run_id": "run1",
+            "status": "queued",
+            "status_url": "http://poll",
+            "reason": None,
+        },
+        status=202,
+    )
+    httpserver.expect_request("/v1/query-runs/run1").respond_with_json(
+        {
+            "created_at": "2026-01-01T00:00:00Z",
+            "snapshot_id": "snap",
+            "sql_hash": "h",
+            "sql_text": "select 1",
+            "status": "succeeded",
+            "result_id": "res1",
+            "id": "run1",
+        }
+    )
+    httpserver.expect_request("/v1/results/res1").respond_with_data(
+        arrow_stream(pa.table({"x": [1]})),
+        status=200,
+        content_type="application/vnd.apache.arrow.stream",
+    )
 
     con = ibis.hotdata.connect(
         api_url=srv,
@@ -252,22 +270,38 @@ def test_ambiguous_default_connection(httpserver: HTTPServer, srv: str):
 def test_x_session_header_on_query(httpserver: HTTPServer, srv: str):
     seen: list[str | None] = []
 
-    sync = {
-        "columns": ["n"],
-        "nullable": [True],
-        "rows": [[0]],
-        "row_count": 1,
-        "execution_time_ms": 1,
-        "query_run_id": "qr",
-        "result_id": None,
-        "warning": None,
-    }
-
     def on_post(req: Request) -> Response:
         seen.append(req.headers.get("X-Session-Id"))
-        return Response(json.dumps(sync), status=200, content_type="application/json")
+        return Response(
+            json.dumps(
+                {
+                    "query_run_id": "run1",
+                    "status": "queued",
+                    "status_url": "http://poll",
+                    "reason": None,
+                }
+            ),
+            status=202,
+            content_type="application/json",
+        )
 
     httpserver.expect_request("/v1/query", method="POST").respond_with_handler(on_post)
+    httpserver.expect_request("/v1/query-runs/run1").respond_with_json(
+        {
+            "created_at": "2026-01-01T00:00:00Z",
+            "snapshot_id": "snap",
+            "sql_hash": "h",
+            "sql_text": "select 0",
+            "status": "succeeded",
+            "result_id": "res1",
+            "id": "run1",
+        }
+    )
+    httpserver.expect_request("/v1/results/res1").respond_with_data(
+        arrow_stream(pa.table({"n": [0]})),
+        status=200,
+        content_type="application/vnd.apache.arrow.stream",
+    )
 
     con = ibis.hotdata.connect(
         api_url=srv,

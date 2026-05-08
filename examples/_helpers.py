@@ -175,17 +175,11 @@ def parser(description: str) -> argparse.ArgumentParser:
         action="store_true",
         help="Disable TLS verification (dev only)",
     )
-    p.add_argument(
-        "--prefer-async",
-        action="store_true",
-        help="Prefer async POST /v1/query",
-    )
     p.add_argument("--timeout", type=float, default=120.0)
     p.add_argument(
         "--default-connection",
         dest="default_connection",
-        default=os.environ.get("HOTDATA_DEFAULT_CONNECTION")
-        or DEFAULT_TPCH_CONNECTION,
+        default=os.environ.get("HOTDATA_DEFAULT_CONNECTION") or DEFAULT_TPCH_CONNECTION,
         help=f"Connection id (= Ibis catalog). Env HOTDATA_DEFAULT_CONNECTION. Default {DEFAULT_TPCH_CONNECTION!r}.",
     )
     p.add_argument(
@@ -200,11 +194,7 @@ def parser(description: str) -> argparse.ArgumentParser:
 def parsed_args(parser: argparse.ArgumentParser) -> argparse.Namespace:
     ns = parser.parse_args()
     if not ns.token.strip() or not ns.workspace_id.strip():
-        parser.error(
-            "Set HOTDATA_TOKEN and HOTDATA_WORKSPACE_ID, or pass --token and --workspace."
-        )
-    if os.environ.get("HOTDATA_PREFER_ASYNC", "").lower() in ("1", "true", "yes"):
-        ns.prefer_async = True
+        parser.error("Set HOTDATA_TOKEN and HOTDATA_WORKSPACE_ID, or pass --token and --workspace.")
     normalize_tpch_defaults(ns)
     return ns
 
@@ -217,7 +207,6 @@ def connect_kwargs(ns: argparse.Namespace, **extras) -> dict:
         "token": ns.token.strip(),
         "workspace_id": ns.workspace_id.strip(),
         "timeout": ns.timeout,
-        "prefer_async": ns.prefer_async,
         "verify_ssl": False if getattr(ns, "insecure", False) else True,
     }
     if ns.session_id:
@@ -256,7 +245,5 @@ def hotdata_connect_uri(ns: argparse.Namespace) -> str:
         qs["default_connection"] = dc
     if ds:
         qs["default_schema"] = ds
-    if ns.prefer_async:
-        qs["prefer_async"] = "true"
     q = urllib.parse.urlencode(qs)
     return f"hotdata://{api_host(ns.api_url)}/?{q}"
