@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-from decimal import Decimal
-
 import pytest
 
 import ibis.expr.datatypes as dt
 
-from ibis_hotdata.types import dtype_from_hotdata_sql_type, dtype_from_json_value
+from ibis_hotdata.types import dtype_from_hotdata_sql_type
 
 
 @pytest.mark.parametrize(
@@ -38,25 +36,3 @@ def test_dtype_from_hotdata_vendor_name_maps_or_string_fallback():
 def test_dtype_from_hotdata_malformed_fallback_string():
     out = dtype_from_hotdata_sql_type('"', nullable=False)
     assert isinstance(out, dt.String)
-
-@pytest.mark.parametrize(
-    ("value", "expected_cls"),
-    [
-        (True, dt.Boolean),
-        (42, dt.Int64),
-        (3.14, dt.Float64),
-        (Decimal("1.23"), dt.Decimal),
-        ("hi", dt.String),
-    ],
-)
-def test_dtype_from_json_primitive(value, expected_cls):
-    out = dtype_from_json_value(value)
-    assert isinstance(out, expected_cls)
-
-
-def test_dtype_from_json_null_and_container():
-    assert dtype_from_json_value(None) is None
-    coll = dtype_from_json_value([1])
-    assert isinstance(coll, dt.Array)
-    blob = dtype_from_json_value({"a": 1})
-    assert isinstance(blob, dt.JSON)

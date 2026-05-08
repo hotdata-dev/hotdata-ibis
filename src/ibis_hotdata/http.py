@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import io
+import json
 import time
 from collections.abc import Callable, Mapping
-from typing import Any, MutableMapping, TypeVar
+from typing import Any, TypeVar
+
+import pyarrow as pa
+import pyarrow_hotfix  # noqa: F401
+import pyarrow.ipc as pa_ipc
 
 from hotdata import ApiClient, Configuration
 from hotdata.api import (
@@ -19,9 +25,11 @@ from hotdata.api import (
 from hotdata.exceptions import ApiException
 from hotdata.models import CreateDatasetRequest, DatasetSource, QueryRequest, UploadDatasetSource
 from hotdata.models.async_query_response import AsyncQueryResponse
-from hotdata.models.query_response import QueryResponse
 
 T = TypeVar("T")
+
+# Matches Hotdata / runtimedb ``GET /v1/results/{{id}}`` Arrow responses.
+APPLICATION_ARROW_STREAM = "application/vnd.apache.arrow.stream"
 
 
 def _sleep_until(deadline: float, interval: float) -> None:
@@ -46,6 +54,15 @@ def _from_api_exception(exc: ApiException) -> HotdataAPIError:
     if body:
         msg = f"{msg} {body}"
     return HotdataAPIError(msg.strip(), status_code=exc.status, body=exc.body)
+
+
+def _ipc_stream_bytes_to_table(data: bytes) -> pa.Table:
+    with pa_ipc.open_stream(io.BytesIO(data)) as reader:
+        return reader.read_all()
+
+
+def _json_utf8(obj: bytes) -> Any:
+    return json.loads(obj.decode("utf-8"))
 
 
 class HotdataClient:
@@ -117,15 +134,12 @@ class HotdataClient:
         self,
         sql: str,
         *,
-        prefer_async: bool = False,
         async_after_ms: int | None = None,
         poll_interval_s: float = 0.25,
         poll_timeout_s: float = 600.0,
     ) -> dict[str, Any]:
-        req = QueryRequest(sql=sql, var_async=prefer_async, async_after_ms=async_after_ms)
+        req = QueryRequest(sql=sql, var_async=True, async_after_ms=async_after_ms)
         out = self._safe_call(self._query.query, req)
-        if isinstance(out, QueryResponse):
-            return self._normalize_result_payload(out.model_dump(by_alias=True))
         if isinstance(out, AsyncQueryResponse):
             query_run_id = out.query_run_id
             deadline = time.monotonic() + poll_timeout_s
@@ -138,8 +152,10 @@ class HotdataClient:
                     result_id = qr.result_id
                     if result_id is None:
                         raise HotdataAPIError("succeeded query run missing result_id")
-                    return self._poll_result_ready(
-                        result_id, deadline=deadline, poll_interval_s=poll_interval_s
+                    return self._poll_result_arrow(
+                        result_id,
+                        deadline=deadline,
+                        poll_interval_s=poll_interval_s,
                     )
                 _sleep_until(deadline, poll_interval_s)
             raise HotdataAPIError("Timeout waiting for asynchronous query")
@@ -165,37 +181,77 @@ class HotdataClient:
         resp = self._safe_call(self._datasets.create_dataset, req)
         return resp.model_dump(by_alias=True, mode="json")
 
-    def _poll_result_ready(
-        self, result_id: str, *, deadline: float, poll_interval_s: float
+    def _poll_result_arrow(
+        self,
+        result_id: str,
+        *,
+        deadline: float,
+        poll_interval_s: float,
     ) -> dict[str, Any]:
+        """Poll ``GET /v1/results/{{id}}`` with ``Accept: application/vnd.apache.arrow.stream``."""
         while time.monotonic() < deadline:
-            res = self._safe_call(self._results.get_result, result_id)
-            d = res.model_dump(by_alias=True)
-            st = d.get("status")
-            if st == "failed":
-                raise HotdataAPIError(d.get("error_message") or "Result failed")
-            if st == "ready" or (d.get("rows") is not None and d.get("columns")):
-                return self._normalize_result_payload(d)
-            _sleep_until(deadline, poll_interval_s)
-        raise HotdataAPIError("Timeout waiting for query result payload")
+            try:
+                raw = self._results.get_result_without_preload_content(
+                    result_id,
+                    _headers={"Accept": APPLICATION_ARROW_STREAM},
+                    _request_timeout=self._timeout,
+                )
+            except ApiException as exc:
+                raise _from_api_exception(exc) from exc
+            body = raw.read()
+            status = raw.status
+            ctype = (raw.headers.get("Content-Type") or "").split(";")[0].strip().lower()
 
-    @staticmethod
-    def _normalize_result_payload(data: MutableMapping[str, Any]) -> dict[str, Any]:
-        raw = data.get("columns")
-        columns = list(raw) if raw is not None else []
-        nullable = list(data.get("nullable") or [])
-        if len(nullable) < len(columns):
-            nullable.extend([True] * (len(columns) - len(nullable)))
-        elif len(nullable) > len(columns):
-            nullable = nullable[: len(columns)]
+            if status == 200 and ctype == APPLICATION_ARROW_STREAM.lower():
+                table = _ipc_stream_bytes_to_table(body)
+                return self._arrow_payload_from_table(table, result_id=result_id)
 
+            if status == 202:
+                _sleep_until(deadline, poll_interval_s)
+                continue
+
+            if status == 409:
+                d = _json_utf8(body) if body else {}
+                raise HotdataAPIError(
+                    d.get("error_message") or "Result failed",
+                    status_code=409,
+                    body=d,
+                )
+
+            if status == 404:
+                d = _json_utf8(body) if body else {}
+                raise HotdataAPIError(
+                    d.get("detail") or f"Result {result_id!r} not found",
+                    status_code=404,
+                    body=d,
+                )
+
+            raise HotdataAPIError(
+                f"Unexpected GET /v1/results/{result_id} status {status}",
+                status_code=status,
+                body=body,
+            )
+
+        raise HotdataAPIError("Timeout waiting for Arrow query result")
+
+    def _arrow_payload_from_table(
+        self,
+        table: pa.Table,
+        *,
+        result_id: str,
+    ) -> dict[str, Any]:
+        sch = table.schema
+        columns = sch.names
+        nullable = [sch.field(i).nullable for i in range(len(columns))]
         return {
+            "format": "arrow",
+            "pa_table": table,
             "columns": columns,
             "nullable": nullable,
-            "rows": list(data["rows"]) if data.get("rows") is not None else [],
-            "row_count": data.get("row_count"),
-            "execution_time_ms": data.get("execution_time_ms"),
-            "query_run_id": data.get("query_run_id"),
-            "result_id": data.get("result_id"),
-            "warning": data.get("warning"),
+            "rows": [],
+            "result_id": result_id,
+            "row_count": table.num_rows,
+            "execution_time_ms": None,
+            "query_run_id": None,
+            "warning": None,
         }

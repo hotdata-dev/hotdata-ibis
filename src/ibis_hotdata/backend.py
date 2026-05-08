@@ -41,7 +41,7 @@ from ibis.backends import (
 from ibis.backends.sql import SQLBackend
 
 from ibis_hotdata.http import HotdataAPIError, HotdataClient
-from ibis_hotdata.types import dtype_from_hotdata_sql_type, dtype_from_json_value
+from ibis_hotdata.types import dtype_from_hotdata_sql_type
 
 _INFORMATION_SCHEMA_PAGE_SIZE = 500
 
@@ -54,32 +54,6 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     import pandas as pd
-
-
-class HotdataRowsCursor:
-    """DB-API–like cursor backed by prefetched rows (used by `_fetch_from_cursor`)."""
-
-    def __init__(self, rows: list) -> None:
-        self._rows = rows
-        self._idx = 0
-
-    def fetchmany(self, size: int = 1024) -> list:
-        start = self._idx
-        end = min(self._idx + size, len(self._rows))
-        self._idx = end
-        return [tuple(r) for r in self._rows[start:end]]
-
-    def fetchall(self) -> list:
-        return [tuple(r) for r in self._rows[self._idx :]]
-
-    def close(self) -> None:
-        self._idx = len(self._rows)
-
-    def __iter__(self) -> Iterator[tuple]:
-        while self._idx < len(self._rows):
-            row = self._rows[self._idx]
-            self._idx += 1
-            yield tuple(row)
 
 
 class Backend(
@@ -107,7 +81,7 @@ class Backend(
         * Base URL defaults to ``https://{host}`` plus optional leading ``path``.
         * Query string may include ``token``, ``workspace_id``, ``session_id``,
           ``timeout``, ``verify_ssl`` (``true`` / ``false``), ``default_connection``,
-          ``default_schema``, ``prefer_async``.
+          ``default_schema``, ``poll_interval_s``, ``poll_timeout_s``.
         * If ``token`` is omitted, ``urlparse`` password (`user:TOKEN@`) is accepted.
         """
         q = dict(parse_qsl(url.query, keep_blank_values=True))
@@ -134,8 +108,6 @@ class Backend(
         token = q.pop("token", None) or (unquote_plus(url.password) if url.password else None)
         workspace_id = q.pop("workspace_id", None)
 
-        prefer_async_s = q.pop("prefer_async", "false")
-
         kwargs = dict(
             api_url=api_url,
             token=token,
@@ -145,7 +117,6 @@ class Backend(
             verify_ssl=verify_ssl,
             default_connection=q.pop("default_connection", None),
             default_schema=q.pop("default_schema", None),
-            prefer_async=str(prefer_async_s).lower() in ("true", "1", "yes"),
             poll_interval_s=float(q.pop("poll_interval_s", "0.25")),
             poll_timeout_s=float(q.pop("poll_timeout_s", "600")),
         )
@@ -169,11 +140,13 @@ class Backend(
         verify_ssl: bool | str = True,
         default_connection: str | None = None,
         default_schema: str | None = None,
-        prefer_async: bool = False,
         poll_interval_s: float = 0.25,
         poll_timeout_s: float = 600.0,
     ) -> None:
         """Create an Ibis client for a Hotdata workspace.
+
+        Query execution always uses Hotdata's async path and downloads ready
+        results as Arrow IPC from ``GET /v1/results/{id}``.
 
         Parameters
         ----------
@@ -196,8 +169,6 @@ class Backend(
         default_schema
             Optional default **database** (remote schema name). If omitted and only
             one schema exists for the default connection, it is chosen automatically.
-        prefer_async
-            When True, requests ``async: true`` on ``POST /v1/query`` (with polling).
         poll_interval_s
             Sleep between ``GET /v1/query-runs/{id}`` polls.
         poll_timeout_s
@@ -206,7 +177,6 @@ class Backend(
         self.disconnect()
         self._default_connection = default_connection
         self._default_schema = default_schema
-        self._prefer_async = prefer_async
         self._poll_interval_s = poll_interval_s
         self._poll_timeout_s = poll_timeout_s
 
@@ -386,62 +356,40 @@ class Backend(
         try:
             data = self._http.execute_query(
                 preview_sql,
-                prefer_async=self._prefer_async,
                 poll_interval_s=self._poll_interval_s,
                 poll_timeout_s=self._poll_timeout_s,
             )
         except HotdataAPIError as exc:
             raise _ibis_err_from_hotdata(exc) from exc
 
-        cols = data["columns"]
-        nulls = data["nullable"]
-        row0 = data["rows"][0] if data.get("rows") else None
-        mapping: dict[str, dt.DataType] = {}
-        for i, name in enumerate(cols):
-            null = bool(nulls[i]) if i < len(nulls) else True
-            if row0 is not None and i < len(row0):
-                inferred = dtype_from_json_value(row0[i])
-                if inferred is not None:
-                    mapping[name] = inferred.copy(nullable=null)
-                    continue
-            mapping[name] = dt.String(nullable=null)
-        return sch.Schema(mapping)
+        from ibis.formats.pyarrow import PyArrowSchema
+
+        return PyArrowSchema.to_ibis(data["pa_table"].schema)
 
     @contextlib.contextmanager
     def _safe_raw_sql(
         self,
         query: str | sge.Expression,
-    ) -> Iterator[HotdataRowsCursor]:
+    ) -> Iterator[Any]:
         if not isinstance(query, str):
             query = query.sql(dialect=self.compiler.dialect, pretty=True)
 
         try:
             payload = self._http.execute_query(
                 query,
-                prefer_async=self._prefer_async,
                 poll_interval_s=self._poll_interval_s,
                 poll_timeout_s=self._poll_timeout_s,
             )
         except HotdataAPIError as exc:
             raise _ibis_err_from_hotdata(exc) from exc
 
-        cur = HotdataRowsCursor(payload["rows"])
-        try:
-            yield cur
-        finally:
-            cur.close()
+        yield payload["pa_table"]
 
     def _fetch_from_cursor(self, cursor, schema: sch.Schema) -> pd.DataFrame:
-        import pandas as pd
         from ibis.formats.pandas import PandasData
 
-        try:
-            df = pd.DataFrame.from_records(iter(cursor), columns=schema.names, coerce_float=True)
-        except Exception:
-            cursor.close()
-            raise
-        df = PandasData.convert_table(df, schema)
-        return df
+        df = cursor.to_pandas()
+        return PandasData.convert_table(df, schema)
 
     def upload_file(self, data: bytes) -> dict[str, Any]:
         """POST ``/v1/files``; returns the upload record (use ``id`` with :meth:`create_dataset_from_upload`)."""

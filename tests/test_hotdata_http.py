@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import io
 import json
 
+import pyarrow as pa
+import pyarrow.ipc as ipc
 import pytest
 from werkzeug.wrappers import Request, Response
 from pytest_httpserver import HTTPServer
 
-from ibis_hotdata.http import HotdataAPIError, HotdataClient
+from ibis_hotdata.http import APPLICATION_ARROW_STREAM, HotdataAPIError, HotdataClient
 
 
 _QR_META = {
@@ -36,18 +39,17 @@ def test_execute_query_async_poll(httpserver: HTTPServer):
         }
     )
 
-    preview = {
-        "columns": ["n"],
-        "nullable": [True],
-        "rows": [[42]],
-        "row_count": 1,
-        "execution_time_ms": 1,
-        "query_run_id": "qr",
-        "result_id": "res1",
-        "warning": None,
-        "status": "ready",
-    }
-    httpserver.expect_oneshot_request("/v1/results/res1").respond_with_json(preview)
+    table = pa.table({"n": [42]})
+    sink = io.BytesIO()
+    with ipc.new_stream(sink, table.schema) as writer:
+        writer.write_table(table)
+    arrow_blob = sink.getvalue()
+
+    httpserver.expect_oneshot_request("/v1/results/res1").respond_with_data(
+        arrow_blob,
+        status=200,
+        content_type=APPLICATION_ARROW_STREAM,
+    )
 
     client = HotdataClient(
         api_url=httpserver.url_for("/").rstrip("/"),
@@ -57,17 +59,16 @@ def test_execute_query_async_poll(httpserver: HTTPServer):
     )
     body = client.execute_query(
         "select 41+1",
-        prefer_async=True,
         poll_interval_s=0,
         poll_timeout_s=5,
     )
     client.close()
 
-    assert body["columns"] == ["n"]
-    assert body["rows"] == [[42]]
+    assert body["format"] == "arrow"
+    assert body["pa_table"].to_pydict() == {"n": [42]}
 
 
-def test_sync_error_raises(httpserver: HTTPServer):
+def test_query_error_raises(httpserver: HTTPServer):
     httpserver.expect_oneshot_request("/v1/query", method="POST").respond_with_json(
         {"detail": "bad"}, status=500
     )
@@ -78,31 +79,51 @@ def test_sync_error_raises(httpserver: HTTPServer):
         verify_ssl=False,
     )
     with pytest.raises(HotdataAPIError):
-        client.execute_query("select 1", prefer_async=False)
+        client.execute_query("select 1")
     client.close()
 
 
-def test_sync_200_pad_shorter_nullable_array(httpserver: HTTPServer):
-    body = {
-        "columns": ["a", "b", "c"],
-        "nullable": [False],
-        "rows": [[1, 2, 3]],
-        "row_count": 1,
-        "execution_time_ms": 0,
-        "query_run_id": "qr",
-        "result_id": None,
-        "warning": None,
-    }
-    httpserver.expect_oneshot_request("/v1/query", method="POST").respond_with_json(body)
+def test_result_arrow_poll_handles_accepted_result(httpserver: HTTPServer):
+    httpserver.expect_oneshot_request("/v1/query", method="POST").respond_with_json(
+        {
+            "query_run_id": "run1",
+            "status": "queued",
+            "status_url": "http://poll",
+            "reason": None,
+        },
+        status=202,
+    )
+    httpserver.expect_oneshot_request("/v1/query-runs/run1").respond_with_json(
+        {
+            **_QR_META,
+            "status": "succeeded",
+            "result_id": "res1",
+            "id": "run1",
+        }
+    )
+    httpserver.expect_oneshot_request("/v1/results/res1").respond_with_json(
+        {"result_id": "res1", "status": "processing"},
+        status=202,
+    )
+
+    table = pa.table({"n": [42]})
+    sink = io.BytesIO()
+    with ipc.new_stream(sink, table.schema) as writer:
+        writer.write_table(table)
+    httpserver.expect_oneshot_request("/v1/results/res1").respond_with_data(
+        sink.getvalue(),
+        status=200,
+        content_type=APPLICATION_ARROW_STREAM,
+    )
+
     client = HotdataClient(
         api_url=httpserver.url_for("/").rstrip("/"),
         token="t",
         workspace_id="w",
         verify_ssl=False,
     )
-    out = client.execute_query("select 1", prefer_async=False)
-    assert len(out["nullable"]) == 3
-    assert out["nullable"][0] is False
+    out = client.execute_query("select 1", poll_interval_s=0, poll_timeout_s=5)
+    assert out["pa_table"].to_pydict() == {"n": [42]}
 
 
 def test_async_query_run_failure(httpserver: HTTPServer):
@@ -125,7 +146,11 @@ def test_async_query_run_failure(httpserver: HTTPServer):
         verify_ssl=False,
     )
     with pytest.raises(HotdataAPIError, match="boom"):
-        client.execute_query("select junk", prefer_async=True, poll_interval_s=0, poll_timeout_s=2)
+        client.execute_query(
+            "select junk",
+            poll_interval_s=0,
+            poll_timeout_s=2,
+        )
     client.close()
 
 
@@ -172,7 +197,9 @@ def test_upload_file_then_create_dataset(httpserver: HTTPServer):
         }
         return Response(json.dumps(payload), status=201, content_type="application/json")
 
-    httpserver.expect_oneshot_request("/v1/datasets", method="POST").respond_with_handler(on_dataset)
+    httpserver.expect_oneshot_request("/v1/datasets", method="POST").respond_with_handler(
+        on_dataset
+    )
 
     client = HotdataClient(
         api_url=httpserver.url_for("/").rstrip("/"),
