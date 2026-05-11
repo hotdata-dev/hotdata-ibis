@@ -343,6 +343,12 @@ def test_create_table_rejects_unsupported_options(httpserver: HTTPServer, srv: s
         con.create_table("tmp", pd.DataFrame({"x": [1]}), overwrite=True)
     with pytest.raises(NotImplementedError, match="schema"):
         con.create_table("tmp", pd.DataFrame({"x": [1]}), database="main")
+    with pytest.raises(com.IbisInputError, match="only one of obj or schema"):
+        con.create_table(
+            "tmp",
+            pd.DataFrame({"x": [1]}),
+            schema=ibis.schema({"x": "int64"}),
+        )
     with pytest.raises(com.IbisInputError, match="pandas.DataFrame or pyarrow.Table"):
         con.create_table("tmp", obj=[{"x": 1}])
 
@@ -388,10 +394,6 @@ def test_drop_table_raises_for_ambiguous_dataset_name(httpserver: HTTPServer, sr
 
 
 def test_drop_table_raises_for_non_dataset_catalog(httpserver: HTTPServer, srv: str):
-    httpserver.expect_request("/v1/datasets").respond_with_json(
-        dataset_list_response(dataset_summary("ds_1", "demo"))
-    )
-
     con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
 
     with pytest.raises(com.TableNotFound):

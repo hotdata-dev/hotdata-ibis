@@ -343,11 +343,12 @@ class Backend(
         self, table_name: str, database: tuple[str, str] | str | None
     ) -> dict[str, Any]:
         schema_name = self._dataset_database(database)
+        if schema_name == "__not_datasets__":
+            raise com.TableNotFound(table_name)
         matches = [
             ds
             for ds in self._iterate_datasets()
             if ds["table_name"] == table_name
-            and schema_name != "__not_datasets__"
             and (schema_name is None or ds["schema_name"] == schema_name)
         ]
         if not matches:
@@ -509,6 +510,9 @@ class Backend(
         import pyarrow.parquet as pq
 
         from ibis.formats.pyarrow import PyArrowSchema
+
+        if obj is not None and schema is not None:
+            raise com.IbisInputError("create_table accepts only one of obj or schema")
 
         if obj is None:
             if schema is None:
