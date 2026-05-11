@@ -56,13 +56,15 @@ Supported today:
 - **Catalog discovery:** `list_catalogs`, `list_databases`, `list_tables`, `current_catalog`, and `current_database` map Hotdata connections and remote schemas into Ibis' catalog/database/table hierarchy.
 - **Table schemas:** `con.table(...)` uses Hotdata information schema column metadata and maps SQL types through Ibis' Postgres type parser.
 - **SQL-backed expressions:** Ibis expressions compile with the Postgres SQLGlot compiler and execute through Hotdata. Common `SELECT` workloads such as projection, filtering, joins, grouping, aggregation, ordering, limits, scalar expressions, and `con.sql(...)` work when the generated SQL is accepted by Hotdata.
-- **Result materialization:** `.execute()` returns pandas objects, while Ibis Arrow paths can use the Arrow result data exposed by the backend. Successful query results are downloaded from Hotdata as Arrow IPC.
+- **Result materialization:** `.execute()` returns pandas objects. `.to_pyarrow()` and `.to_pyarrow_batches()` use the Arrow IPC result data exposed by Hotdata without converting through JSON rows.
 - **Raw SQL escape hatch:** `con.sql("SELECT ...", dialect="postgres")` is the most reliable way to use Hotdata-specific federated table names or SQL that Ibis does not model directly.
 - **Uploads and datasets:** `upload_file` plus `create_dataset_from_upload` can create Hotdata datasets; query them as `datasets.<schema>.<table>` after creation.
+- **Limited `create_table`:** `con.create_table("name", pandas_df)` and `con.create_table("name", pyarrow_table)` serialize local data to Parquet, upload it, and create a Hotdata dataset. Schema-only calls create an empty Parquet-backed dataset.
+- **Dataset-only `drop_table`:** `con.drop_table(...)` deletes matching Hotdata-managed datasets. It does not drop external source tables.
 
 Not supported as full Ibis backend features:
 
-- **DDL and mutations:** Ibis `create_table`, `drop_table`, inserts, updates, deletes, overwrites, and schema-altering operations are not implemented.
+- **General DDL and mutations:** Arbitrary remote `CREATE TABLE` / `DROP TABLE`, inserts, updates, deletes, overwrites, and schema-altering operations are not implemented. `create_table` and `drop_table` are limited to Hotdata datasets as described above.
 - **Temporary tables and in-memory registration:** `supports_temporary_tables` is false, and in-memory tables are not uploaded automatically for joins.
 - **Python UDFs:** `supports_python_udfs` is false.
 - **Transactions and sessions as database state:** Hotdata sandbox sessions can be passed as `session_id`, but the backend does not expose transaction APIs.

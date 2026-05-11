@@ -5,8 +5,10 @@ import json
 
 import ibis
 import ibis.common.exceptions as com
+import pandas as pd
 import pyarrow as pa
 import pyarrow.ipc as ipc
+import pyarrow.parquet as pq
 import pytest
 from werkzeug.wrappers import Request, Response
 
@@ -33,6 +35,29 @@ def arrow_stream(table: pa.Table) -> bytes:
     with ipc.new_stream(sink, table.schema) as writer:
         writer.write_table(table)
     return sink.getvalue()
+
+
+def dataset_list_response(*datasets: dict, has_more: bool = False, offset: int = 0) -> dict:
+    return {
+        "count": len(datasets),
+        "datasets": list(datasets),
+        "has_more": has_more,
+        "limit": 1000,
+        "offset": offset,
+    }
+
+
+def dataset_summary(dataset_id: str, table_name: str, schema_name: str = "sch_1") -> dict:
+    return {
+        "created_at": "2026-01-01T00:00:00Z",
+        "id": dataset_id,
+        "label": table_name,
+        "latest_version": 1,
+        "pinned_version": None,
+        "schema_name": schema_name,
+        "table_name": table_name,
+        "updated_at": "2026-01-01T00:00:00Z",
+    }
 
 
 def test_connect_via_url(httpserver: HTTPServer, srv: str):
@@ -87,6 +112,290 @@ def test_sql_execution(httpserver: HTTPServer, srv: str):
     tbl = con.sql("SELECT 1 AS x", dialect="postgres")
     pdf = tbl.execute()
     assert list(pdf["x"]) == [1]
+
+
+def test_to_pyarrow_uses_arrow_result(httpserver: HTTPServer, srv: str):
+    httpserver.expect_request("/v1/query", method="POST").respond_with_json(
+        {
+            "query_run_id": "run1",
+            "status": "queued",
+            "status_url": "http://poll",
+            "reason": None,
+        },
+        status=202,
+    )
+    httpserver.expect_request("/v1/query-runs/run1").respond_with_json(
+        {
+            "created_at": "2026-01-01T00:00:00Z",
+            "snapshot_id": "snap",
+            "sql_hash": "h",
+            "sql_text": "select 1",
+            "status": "succeeded",
+            "result_id": "res1",
+            "id": "run1",
+        }
+    )
+    httpserver.expect_request("/v1/results/res1").respond_with_data(
+        arrow_stream(pa.table({"x": [1, 2]})),
+        status=200,
+        content_type="application/vnd.apache.arrow.stream",
+    )
+
+    con = ibis.hotdata.connect(
+        api_url=srv,
+        token="tok",
+        workspace_id="ws",
+        verify_ssl=False,
+        default_connection=TPCH_CONN,
+        default_schema=TPCH_SF1,
+    )
+
+    tbl = con.sql("SELECT 1 AS x", dialect="postgres")
+    out = con.to_pyarrow(tbl)
+    assert out.to_pydict() == {"x": [1, 2]}
+
+
+def test_to_pyarrow_batches_uses_arrow_result(httpserver: HTTPServer, srv: str):
+    httpserver.expect_request("/v1/query", method="POST").respond_with_json(
+        {
+            "query_run_id": "run1",
+            "status": "queued",
+            "status_url": "http://poll",
+            "reason": None,
+        },
+        status=202,
+    )
+    httpserver.expect_request("/v1/query-runs/run1").respond_with_json(
+        {
+            "created_at": "2026-01-01T00:00:00Z",
+            "snapshot_id": "snap",
+            "sql_hash": "h",
+            "sql_text": "select 1",
+            "status": "succeeded",
+            "result_id": "res1",
+            "id": "run1",
+        }
+    )
+    httpserver.expect_request("/v1/results/res1").respond_with_data(
+        arrow_stream(pa.table({"x": [1, 2, 3]})),
+        status=200,
+        content_type="application/vnd.apache.arrow.stream",
+    )
+
+    con = ibis.hotdata.connect(
+        api_url=srv,
+        token="tok",
+        workspace_id="ws",
+        verify_ssl=False,
+        default_connection=TPCH_CONN,
+        default_schema=TPCH_SF1,
+    )
+
+    tbl = con.sql("SELECT 1 AS x", dialect="postgres")
+    with con.to_pyarrow_batches(tbl, chunk_size=2) as reader:
+        out = reader.read_all()
+    assert out.to_pydict() == {"x": [1, 2, 3]}
+
+
+def test_create_table_from_pandas_uploads_parquet_dataset(httpserver: HTTPServer, srv: str):
+    uploaded: dict[str, pa.Table] = {}
+
+    def on_upload(req: Request) -> Response:
+        assert req.headers["Content-Type"] == "application/parquet"
+        uploaded["table"] = pq.read_table(io.BytesIO(req.get_data()))
+        return Response(
+            json.dumps(
+                {
+                    "id": "upl_1",
+                    "status": "ready",
+                    "size_bytes": len(req.get_data()),
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "content_type": "application/parquet",
+                }
+            ),
+            status=201,
+            content_type="application/json",
+        )
+
+    def on_dataset(req: Request) -> Response:
+        body = req.get_json()
+        assert body == {
+            "label": "demo",
+            "source": {"upload_id": "upl_1", "format": "parquet"},
+            "table_name": "demo",
+        }
+        return Response(
+            json.dumps(
+                {
+                    "id": "ds_1",
+                    "label": "demo",
+                    "schema_name": "sch_1",
+                    "table_name": "demo",
+                    "status": "ready",
+                    "created_at": "2026-01-01T00:00:00Z",
+                }
+            ),
+            status=201,
+            content_type="application/json",
+        )
+
+    httpserver.expect_request("/v1/files", method="POST").respond_with_handler(on_upload)
+    httpserver.expect_request("/v1/datasets", method="POST").respond_with_handler(on_dataset)
+
+    con = ibis.hotdata.connect(
+        api_url=srv,
+        token="tok",
+        workspace_id="ws",
+        verify_ssl=False,
+    )
+
+    table = con.create_table("demo", pd.DataFrame({"x": [1, 2]}))
+
+    assert uploaded["table"].to_pydict() == {"x": [1, 2]}
+    assert table.schema().names == ("x",)
+
+
+def test_create_table_from_pyarrow_uploads_parquet_dataset(httpserver: HTTPServer, srv: str):
+    uploaded: dict[str, pa.Table] = {}
+
+    def on_upload(req: Request) -> Response:
+        uploaded["table"] = pq.read_table(io.BytesIO(req.get_data()))
+        return Response(
+            json.dumps(
+                {
+                    "id": "upl_1",
+                    "status": "ready",
+                    "size_bytes": len(req.get_data()),
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "content_type": "application/parquet",
+                }
+            ),
+            status=201,
+            content_type="application/json",
+        )
+
+    httpserver.expect_request("/v1/files", method="POST").respond_with_handler(on_upload)
+    httpserver.expect_request("/v1/datasets", method="POST").respond_with_json(
+        {
+            "id": "ds_1",
+            "label": "arrow_demo",
+            "schema_name": "sch_1",
+            "table_name": "arrow_demo",
+            "status": "ready",
+            "created_at": "2026-01-01T00:00:00Z",
+        },
+        status=201,
+    )
+
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+    expr = con.create_table("arrow_demo", pa.table({"x": [1], "y": ["a"]}))
+
+    assert uploaded["table"].to_pydict() == {"x": [1], "y": ["a"]}
+    assert expr.schema().names == ("x", "y")
+
+
+def test_create_table_schema_only_uploads_empty_parquet(httpserver: HTTPServer, srv: str):
+    uploaded: dict[str, pa.Table] = {}
+
+    def on_upload(req: Request) -> Response:
+        uploaded["table"] = pq.read_table(io.BytesIO(req.get_data()))
+        return Response(
+            json.dumps(
+                {
+                    "id": "upl_1",
+                    "status": "ready",
+                    "size_bytes": len(req.get_data()),
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "content_type": "application/parquet",
+                }
+            ),
+            status=201,
+            content_type="application/json",
+        )
+
+    httpserver.expect_request("/v1/files", method="POST").respond_with_handler(on_upload)
+    httpserver.expect_request("/v1/datasets", method="POST").respond_with_json(
+        {
+            "id": "ds_1",
+            "label": "empty_demo",
+            "schema_name": "sch_1",
+            "table_name": "empty_demo",
+            "status": "ready",
+            "created_at": "2026-01-01T00:00:00Z",
+        },
+        status=201,
+    )
+
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+    expr = con.create_table("empty_demo", schema=ibis.schema({"x": "int64", "y": "string"}))
+
+    assert uploaded["table"].num_rows == 0
+    assert uploaded["table"].schema.names == ["x", "y"]
+    assert expr.schema().names == ("x", "y")
+
+
+def test_create_table_rejects_unsupported_options(httpserver: HTTPServer, srv: str):
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+
+    with pytest.raises(NotImplementedError, match="temporary"):
+        con.create_table("tmp", pd.DataFrame({"x": [1]}), temp=True)
+    with pytest.raises(NotImplementedError, match="overwrite"):
+        con.create_table("tmp", pd.DataFrame({"x": [1]}), overwrite=True)
+    with pytest.raises(NotImplementedError, match="schema"):
+        con.create_table("tmp", pd.DataFrame({"x": [1]}), database="main")
+    with pytest.raises(com.IbisInputError, match="pandas.DataFrame or pyarrow.Table"):
+        con.create_table("tmp", obj=[{"x": 1}])
+
+
+def test_drop_table_deletes_matching_dataset(httpserver: HTTPServer, srv: str):
+    httpserver.expect_request("/v1/datasets").respond_with_json(
+        dataset_list_response(dataset_summary("ds_1", "demo"))
+    )
+    httpserver.expect_request("/v1/datasets/ds_1", method="DELETE").respond_with_data(
+        b"", status=204
+    )
+
+    con = ibis.hotdata.connect(
+        api_url=srv,
+        token="tok",
+        workspace_id="ws",
+        verify_ssl=False,
+    )
+
+    con.drop_table("demo", database=("datasets", "sch_1"))
+
+
+def test_drop_table_force_ignores_missing_dataset(httpserver: HTTPServer, srv: str):
+    httpserver.expect_request("/v1/datasets").respond_with_json(dataset_list_response())
+
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+
+    con.drop_table("missing", force=True)
+
+
+def test_drop_table_raises_for_ambiguous_dataset_name(httpserver: HTTPServer, srv: str):
+    httpserver.expect_request("/v1/datasets").respond_with_json(
+        dataset_list_response(
+            dataset_summary("ds_1", "demo", schema_name="a"),
+            dataset_summary("ds_2", "demo", schema_name="b"),
+        )
+    )
+
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+
+    with pytest.raises(com.IbisInputError, match="Multiple Hotdata datasets"):
+        con.drop_table("demo")
+
+
+def test_drop_table_raises_for_non_dataset_catalog(httpserver: HTTPServer, srv: str):
+    httpserver.expect_request("/v1/datasets").respond_with_json(
+        dataset_list_response(dataset_summary("ds_1", "demo"))
+    )
+
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+
+    with pytest.raises(com.TableNotFound):
+        con.drop_table("demo", database=("tpch", "sch_1"))
 
 
 def test_compile_scalar_no_roundtrip(httpserver: HTTPServer, srv: str):
