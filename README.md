@@ -44,9 +44,31 @@ con = ibis.connect(
 
 **Execution:** SQL is compiled with Ibis’s **Postgres** SQLGlot compiler. The client submits queries asynchronously with `POST /v1/query`, polls `GET /v1/query-runs/{id}`, then downloads ready results as Arrow IPC from `GET /v1/results/{id}`. Tuning: `poll_interval_s`, `poll_timeout_s` on `connect()`.
 
-**Types:** Typed tables come from Hotdata’s information schema. `con.sql(...)` types are inferred from a small preview query; see [Hotdata SQL](https://www.hotdata.dev/docs/sql) for server behavior.
+**Types:** Typed tables come from Hotdata’s information schema. `con.sql(...)` types are inferred from a small preview query and Arrow schema; see [Hotdata SQL](https://www.hotdata.dev/docs/sql) for server behavior.
 
-**Not in v1:** Ibis `create_table`, embeddings, indexes. **Uploads:** use `upload_file` + `create_dataset_from_upload` on the connection object (or raw SQL); query datasets as `datasets.<schema>.<table>` per Hotdata.
+## Ibis Support Overview
+
+`ibis-hotdata` is a read-oriented SQL backend. It is useful for exploring Hotdata workspaces with Ibis expressions, running federated SQL, and materializing results locally, but it is not a full mutable database backend.
+
+Supported today:
+
+- **Connection setup:** `ibis.hotdata.connect(...)` and `ibis.connect("hotdata://...")` with token, workspace, optional sandbox session, TLS, timeout, and polling settings.
+- **Catalog discovery:** `list_catalogs`, `list_databases`, `list_tables`, `current_catalog`, and `current_database` map Hotdata connections and remote schemas into Ibis' catalog/database/table hierarchy.
+- **Table schemas:** `con.table(...)` uses Hotdata information schema column metadata and maps SQL types through Ibis' Postgres type parser.
+- **SQL-backed expressions:** Ibis expressions compile with the Postgres SQLGlot compiler and execute through Hotdata. Common `SELECT` workloads such as projection, filtering, joins, grouping, aggregation, ordering, limits, scalar expressions, and `con.sql(...)` work when the generated SQL is accepted by Hotdata.
+- **Result materialization:** `.execute()` returns pandas objects, while Ibis Arrow paths can use the Arrow result data exposed by the backend. Successful query results are downloaded from Hotdata as Arrow IPC.
+- **Raw SQL escape hatch:** `con.sql("SELECT ...", dialect="postgres")` is the most reliable way to use Hotdata-specific federated table names or SQL that Ibis does not model directly.
+- **Uploads and datasets:** `upload_file` plus `create_dataset_from_upload` can create Hotdata datasets; query them as `datasets.<schema>.<table>` after creation.
+
+Not supported as full Ibis backend features:
+
+- **DDL and mutations:** Ibis `create_table`, `drop_table`, inserts, updates, deletes, overwrites, and schema-altering operations are not implemented.
+- **Temporary tables and in-memory registration:** `supports_temporary_tables` is false, and in-memory tables are not uploaded automatically for joins.
+- **Python UDFs:** `supports_python_udfs` is false.
+- **Transactions and sessions as database state:** Hotdata sandbox sessions can be passed as `session_id`, but the backend does not expose transaction APIs.
+- **Backend-native SQL dialect:** Compilation uses Ibis' Postgres dialect as the closest fit. Hotdata SQL and federation rules are authoritative, so not every Ibis expression that compiles is guaranteed to execute remotely.
+- **Complete Ibis compliance:** The backend is experimental and has focused test coverage for connection, discovery, schema mapping, execution, uploads, and Arrow results. It has not yet been validated against the full Ibis backend test suite.
+- **Hotdata platform APIs beyond SQL datasets:** embeddings, indexes, query history management, sandbox lifecycle management, and other Hotdata-specific APIs are outside the Ibis backend surface.
 
 ## Development
 
