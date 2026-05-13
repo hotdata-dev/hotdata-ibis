@@ -60,6 +60,25 @@ def dataset_summary(dataset_id: str, table_name: str, schema_name: str = "sch_1"
     }
 
 
+def information_schema_response(table_name: str, schema_name: str, columns: list[dict]) -> dict:
+    return {
+        "count": 1,
+        "has_more": False,
+        "limit": 500,
+        "next_cursor": None,
+        "tables": [
+            {
+                "connection": "datasets",
+                "schema": schema_name,
+                "table": table_name,
+                "synced": True,
+                "last_sync": None,
+                "columns": columns,
+            }
+        ],
+    }
+
+
 def test_connect_via_url(httpserver: HTTPServer, srv: str):
     url = f"hotdata://127.0.0.1:{httpserver.port}?token=tok&workspace_id=ws_demo&verify_ssl=false"
     con = ibis.connect(url)
@@ -241,6 +260,13 @@ def test_create_table_from_pandas_uploads_parquet_dataset(httpserver: HTTPServer
 
     httpserver.expect_request("/v1/files", method="POST").respond_with_handler(on_upload)
     httpserver.expect_request("/v1/datasets", method="POST").respond_with_handler(on_dataset)
+    httpserver.expect_request("/v1/information_schema").respond_with_json(
+        information_schema_response(
+            "demo",
+            "sch_1",
+            [{"name": "x", "data_type": "BIGINT", "nullable": True}],
+        )
+    )
 
     con = ibis.hotdata.connect(
         api_url=srv,
@@ -286,6 +312,16 @@ def test_create_table_from_pyarrow_uploads_parquet_dataset(httpserver: HTTPServe
         },
         status=201,
     )
+    httpserver.expect_request("/v1/information_schema").respond_with_json(
+        information_schema_response(
+            "arrow_demo",
+            "sch_1",
+            [
+                {"name": "x", "data_type": "BIGINT", "nullable": True},
+                {"name": "y", "data_type": "VARCHAR", "nullable": True},
+            ],
+        )
+    )
 
     con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
     expr = con.create_table("arrow_demo", pa.table({"x": [1], "y": ["a"]}))
@@ -324,6 +360,16 @@ def test_create_table_schema_only_uploads_empty_parquet(httpserver: HTTPServer, 
             "created_at": "2026-01-01T00:00:00Z",
         },
         status=201,
+    )
+    httpserver.expect_request("/v1/information_schema").respond_with_json(
+        information_schema_response(
+            "empty_demo",
+            "sch_1",
+            [
+                {"name": "x", "data_type": "BIGINT", "nullable": True},
+                {"name": "y", "data_type": "VARCHAR", "nullable": True},
+            ],
+        )
     )
 
     con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)

@@ -75,12 +75,12 @@ Not supported as full Ibis backend features:
 ## Development
 
 ```bash
-uv sync --group dev   # pytest, ruff, httpx (for examples)
+uv sync   # installs dev group by default (pytest, ruff, httpx for examples)
 uv run pytest
 uv run ruff check src tests examples
 ```
 
-Lockfile CI: `uv sync --locked --group dev && uv run pytest`.
+Lockfile CI: `uv sync --locked && uv run pytest`.
 
 ## TPC-H for the examples
 
@@ -91,7 +91,7 @@ Examples assume something like **`tpch.tpch_sf1.customer`**. Provision TPC-H in 
 Needs `HOTDATA_TOKEN` and `HOTDATA_WORKSPACE_ID`.
 
 ```bash
-uv sync --group dev
+uv sync
 export HOTDATA_TOKEN=…
 export HOTDATA_WORKSPACE_ID=…
 uv run python examples/01_catalog_introspection.py

@@ -466,6 +466,11 @@ class Backend(
         chunk_size: int = 1_000_000,
         **kwargs: Any,
     ):
+        """Execute to Arrow and expose local record batches.
+
+        Hotdata currently returns one Arrow IPC result for the full query. This
+        method downloads that result first, then splits it into local batches.
+        """
         import pyarrow as pa
 
         table = self.to_pyarrow(expr.as_table(), params=params, limit=limit, **kwargs)
@@ -509,8 +514,6 @@ class Backend(
         import pyarrow as pa
         import pyarrow.parquet as pq
 
-        from ibis.formats.pyarrow import PyArrowSchema
-
         if obj is not None and schema is not None:
             raise com.IbisInputError("create_table accepts only one of obj or schema")
 
@@ -533,7 +536,7 @@ class Backend(
 
         sink = io.BytesIO()
         pq.write_table(table, sink)
-        return sink.getvalue(), PyArrowSchema.to_ibis(table.schema)
+        return sink.getvalue()
 
     def create_table(
         self,
@@ -553,7 +556,7 @@ class Backend(
         if database is not None:
             raise NotImplementedError("Hotdata datasets choose their schema at creation time.")
 
-        data, table_schema = self._local_table_to_parquet(obj, schema)
+        data = self._local_table_to_parquet(obj, schema)
         upload = self.upload_file(data, content_type="application/parquet")
         dataset = self.create_dataset_from_upload(
             upload_id=upload["id"],
@@ -561,12 +564,7 @@ class Backend(
             table_name=name,
             file_format="parquet",
         )
-        return ops.DatabaseTable(
-            dataset["table_name"],
-            schema=table_schema,
-            source=self,
-            namespace=ops.Namespace(catalog="datasets", database=dataset["schema_name"]),
-        ).to_expr()
+        return self.table(dataset["table_name"], database=("datasets", dataset["schema_name"]))
 
     def drop_table(
         self,
