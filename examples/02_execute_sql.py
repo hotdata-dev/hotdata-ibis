@@ -4,7 +4,7 @@ Run arbitrary Hotdata-compatible SQL via ``con.sql`` and execute to pandas.
 
 From the repo root::
 
-    HOTDATA_TOKEN=... HOTDATA_WORKSPACE_ID=... \\
+    HOTDATA_API_KEY=... HOTDATA_WORKSPACE_ID=... \\
       uv run python examples/02_execute_sql.py \\
       'SELECT COUNT(*) AS n FROM tpch.tpch_sf1.customer'
 
