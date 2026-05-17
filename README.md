@@ -88,12 +88,12 @@ Examples assume something like **`tpch.tpch_sf1.customer`**. Provision TPC-H in 
 
 ## Examples
 
-Needs `HOTDATA_API_KEY` and `HOTDATA_WORKSPACE_ID`.
+Needs `HOTDATA_API_KEY` and `HOTDATA_WORKSPACE`.
 
 ```bash
 uv sync
 export HOTDATA_API_KEY=…
-export HOTDATA_WORKSPACE_ID=…
+export HOTDATA_WORKSPACE=…
 uv run python examples/01_catalog_introspection.py
 uv run python examples/02_execute_sql.py 'SELECT COUNT(*) AS n FROM tpch.tpch_sf1.customer'
 uv run python examples/03_connect_via_url.py

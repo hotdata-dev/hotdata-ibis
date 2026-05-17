@@ -161,8 +161,8 @@ def parser(description: str) -> argparse.ArgumentParser:
     p.add_argument(
         "--workspace",
         dest="workspace_id",
-        default=os.environ.get("HOTDATA_WORKSPACE_ID", ""),
-        help="Workspace public id (env HOTDATA_WORKSPACE_ID)",
+        default=os.environ.get("HOTDATA_WORKSPACE", ""),
+        help="Workspace public id (env HOTDATA_WORKSPACE)",
     )
     p.add_argument(
         "--session",
@@ -194,7 +194,7 @@ def parser(description: str) -> argparse.ArgumentParser:
 def parsed_args(parser: argparse.ArgumentParser) -> argparse.Namespace:
     ns = parser.parse_args()
     if not ns.token.strip() or not ns.workspace_id.strip():
-        parser.error("Set HOTDATA_API_KEY and HOTDATA_WORKSPACE_ID, or pass --token and --workspace.")
+        parser.error("Set HOTDATA_API_KEY and HOTDATA_WORKSPACE, or pass --token and --workspace.")
     normalize_tpch_defaults(ns)
     return ns
 
