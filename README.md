@@ -11,6 +11,17 @@ uv pip install ibis-hotdata
 # or: python -m pip install ibis-hotdata
 ```
 
+## Features
+
+- **Ibis connection API** — connect with `ibis.hotdata.connect(...)` or `ibis.connect("hotdata://...")`.
+- **Hotdata catalog mapping** — expose Hotdata connections, schemas, and tables through Ibis catalogs, databases, and tables.
+- **SQL-backed expression execution** — compile Ibis expressions with the Postgres SQLGlot compiler and execute them through Hotdata query APIs.
+- **Typed table discovery** — load schema metadata from Hotdata information schema and map SQL types into Ibis types.
+- **Arrow and pandas results** — materialize expressions as pandas DataFrames, PyArrow tables, or local Arrow record batches.
+- **Raw SQL escape hatch** — use `con.sql(..., dialect="postgres")` when Hotdata-specific federated SQL is clearer than modeled Ibis expressions.
+- **Dataset upload helpers** — upload local pandas or PyArrow data as Parquet-backed Hotdata datasets through `create_table`.
+- **Dataset cleanup** — delete Hotdata-managed datasets through the limited `drop_table` implementation.
+
 ## Connect
 
 Programmatic API:
