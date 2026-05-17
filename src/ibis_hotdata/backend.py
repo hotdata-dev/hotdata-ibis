@@ -16,6 +16,7 @@ See the README for dialect and typing limitations.
 from __future__ import annotations
 
 import contextlib
+import io
 from collections.abc import Iterable, Mapping
 from functools import cached_property
 from importlib.metadata import PackageNotFoundError
@@ -319,6 +320,45 @@ class Backend(
             if cursor is None:
                 break
 
+    def _iterate_datasets(self) -> Iterable[dict[str, Any]]:
+        offset = 0
+        limit = 1000
+        while True:
+            chunk = self._http.list_datasets(limit=limit, offset=offset)
+            yield from chunk["datasets"]
+            if not chunk.get("has_more"):
+                break
+            offset += limit
+
+    def _dataset_database(self, database: tuple[str, str] | str | None) -> str | None:
+        if database is None:
+            return None
+        table_loc = self._to_sqlglot_table(database)
+        catalog, schema_name = self._to_catalog_db_tuple(table_loc)
+        if catalog and catalog != "datasets":
+            return "__not_datasets__"
+        return schema_name or catalog
+
+    def _find_dataset(
+        self, table_name: str, database: tuple[str, str] | str | None
+    ) -> dict[str, Any]:
+        schema_name = self._dataset_database(database)
+        if schema_name == "__not_datasets__":
+            raise com.TableNotFound(table_name)
+        matches = [
+            ds
+            for ds in self._iterate_datasets()
+            if ds["table_name"] == table_name
+            and (schema_name is None or ds["schema_name"] == schema_name)
+        ]
+        if not matches:
+            raise com.TableNotFound(table_name)
+        if len(matches) > 1:
+            raise com.IbisInputError(
+                f"Multiple Hotdata datasets named {table_name!r}; pass database=('datasets', schema)."
+            )
+        return matches[0]
+
     # --- schema / sql execution --------------------------------------------
 
     def get_schema(
@@ -391,10 +431,58 @@ class Backend(
         df = cursor.to_pandas()
         return PandasData.convert_table(df, schema)
 
-    def upload_file(self, data: bytes) -> dict[str, Any]:
+    def to_pyarrow(
+        self,
+        expr: ir.Expr,
+        /,
+        *,
+        params: Mapping[ir.Scalar, Any] | None = None,
+        limit: int | str | None = None,
+        **kwargs: Any,
+    ):
+        self._run_pre_execute_hooks(expr)
+        table_expr = expr.as_table()
+        sql = self.compile(table_expr, params=params, limit=limit, **kwargs)
+        try:
+            payload = self._http.execute_query(
+                sql,
+                poll_interval_s=self._poll_interval_s,
+                poll_timeout_s=self._poll_timeout_s,
+            )
+        except HotdataAPIError as exc:
+            raise _ibis_err_from_hotdata(exc) from exc
+        table = payload["pa_table"]
+        arrow_schema = table_expr.schema().to_pyarrow()
+        table = table.rename_columns(list(table_expr.columns)).cast(arrow_schema)
+        return expr.__pyarrow_result__(table)
+
+    def to_pyarrow_batches(
+        self,
+        expr: ir.Expr,
+        /,
+        *,
+        params: Mapping[ir.Scalar, Any] | None = None,
+        limit: int | str | None = None,
+        chunk_size: int = 1_000_000,
+        **kwargs: Any,
+    ):
+        """Execute to Arrow and expose local record batches.
+
+        Hotdata currently returns one Arrow IPC result for the full query. This
+        method downloads that result first, then splits it into local batches.
+        """
+        import pyarrow as pa
+
+        table = self.to_pyarrow(expr.as_table(), params=params, limit=limit, **kwargs)
+        return pa.ipc.RecordBatchReader.from_batches(
+            table.schema,
+            table.to_batches(max_chunksize=chunk_size),
+        )
+
+    def upload_file(self, data: bytes, *, content_type: str | None = None) -> dict[str, Any]:
         """POST ``/v1/files``; returns the upload record (use ``id`` with :meth:`create_dataset_from_upload`)."""
         try:
-            return self._http.upload_file(data)
+            return self._http.upload_file(data, content_type=content_type)
         except HotdataAPIError as exc:
             raise _ibis_err_from_hotdata(exc) from exc
 
@@ -421,14 +509,81 @@ class Backend(
         except HotdataAPIError as exc:
             raise _ibis_err_from_hotdata(exc) from exc
 
-    def create_table(self, *_args: Any, **_kwargs: Any) -> ir.Table:
-        raise NotImplementedError(
-            "Hotdata does not implement Ibis create_table in v1; use upload_file + "
-            "create_dataset_from_upload, then SQL or con.table with the returned names."
-        )
+    def _local_table_to_parquet(self, obj: Any, schema: sch.Schema | None):
+        import pandas as pd
+        import pyarrow as pa
+        import pyarrow.parquet as pq
 
-    def drop_table(self, *_args: Any, **_kwargs: Any) -> None:
-        raise NotImplementedError("Hotdata backend does not implement drop_table in v1.")
+        if obj is not None and schema is not None:
+            raise com.IbisInputError("create_table accepts only one of obj or schema")
+
+        if obj is None:
+            if schema is None:
+                raise com.IbisInputError("create_table requires a pandas/pyarrow object or schema")
+            arrow_schema = schema.to_pyarrow()
+            table = pa.Table.from_arrays(
+                [pa.array([], type=field.type) for field in arrow_schema],
+                schema=arrow_schema,
+            )
+        elif isinstance(obj, pa.Table):
+            table = obj
+        elif isinstance(obj, pd.DataFrame):
+            table = pa.Table.from_pandas(obj, preserve_index=False)
+        else:
+            raise com.IbisInputError(
+                "create_table currently accepts pandas.DataFrame or pyarrow.Table"
+            )
+
+        sink = io.BytesIO()
+        pq.write_table(table, sink)
+        return sink.getvalue()
+
+    def create_table(
+        self,
+        name: str,
+        /,
+        obj: Any = None,
+        *,
+        schema: sch.Schema | None = None,
+        database: str | None = None,
+        temp: bool = False,
+        overwrite: bool = False,
+    ) -> ir.Table:
+        if temp:
+            raise NotImplementedError("Hotdata does not support temporary tables.")
+        if overwrite:
+            raise NotImplementedError("Hotdata create_table does not support overwrite.")
+        if database is not None:
+            raise NotImplementedError("Hotdata datasets choose their schema at creation time.")
+
+        data = self._local_table_to_parquet(obj, schema)
+        upload = self.upload_file(data, content_type="application/parquet")
+        dataset = self.create_dataset_from_upload(
+            upload_id=upload["id"],
+            label=name,
+            table_name=name,
+            file_format="parquet",
+        )
+        return self.table(dataset["table_name"], database=("datasets", dataset["schema_name"]))
+
+    def drop_table(
+        self,
+        name: str,
+        /,
+        *,
+        database: tuple[str, str] | str | None = None,
+        force: bool = False,
+    ) -> None:
+        try:
+            dataset = self._find_dataset(name, database)
+        except com.TableNotFound:
+            if force:
+                return
+            raise
+        try:
+            self._http.delete_dataset(dataset["id"])
+        except HotdataAPIError as exc:
+            raise _ibis_err_from_hotdata(exc) from exc
 
     def _register_in_memory_table(self, _op: ops.InMemoryTable) -> None:
         return

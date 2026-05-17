@@ -11,6 +11,17 @@ uv pip install ibis-hotdata
 # or: python -m pip install ibis-hotdata
 ```
 
+## Features
+
+- **Ibis connection API** — connect with `ibis.hotdata.connect(...)` or `ibis.connect("hotdata://...")`.
+- **Hotdata catalog mapping** — expose Hotdata connections, schemas, and tables through Ibis catalogs, databases, and tables.
+- **SQL-backed expression execution** — compile Ibis expressions with the Postgres SQLGlot compiler and execute them through Hotdata query APIs.
+- **Typed table discovery** — load schema metadata from Hotdata information schema and map SQL types into Ibis types.
+- **Arrow and pandas results** — materialize expressions as pandas DataFrames, PyArrow tables, or local Arrow record batches.
+- **Raw SQL escape hatch** — use `con.sql(..., dialect="postgres")` when Hotdata-specific federated SQL is clearer than modeled Ibis expressions.
+- **Dataset upload helpers** — upload local pandas or PyArrow data as Parquet-backed Hotdata datasets through `create_table`.
+- **Dataset cleanup** — delete Hotdata-managed datasets through the limited `drop_table` implementation.
+
 ## Connect
 
 Programmatic API:
@@ -44,19 +55,43 @@ con = ibis.connect(
 
 **Execution:** SQL is compiled with Ibis’s **Postgres** SQLGlot compiler. The client submits queries asynchronously with `POST /v1/query`, polls `GET /v1/query-runs/{id}`, then downloads ready results as Arrow IPC from `GET /v1/results/{id}`. Tuning: `poll_interval_s`, `poll_timeout_s` on `connect()`.
 
-**Types:** Typed tables come from Hotdata’s information schema. `con.sql(...)` types are inferred from a small preview query; see [Hotdata SQL](https://www.hotdata.dev/docs/sql) for server behavior.
+**Types:** Typed tables come from Hotdata’s information schema. `con.sql(...)` types are inferred from a small preview query and Arrow schema; see [Hotdata SQL](https://www.hotdata.dev/docs/sql) for server behavior.
 
-**Not in v1:** Ibis `create_table`, embeddings, indexes. **Uploads:** use `upload_file` + `create_dataset_from_upload` on the connection object (or raw SQL); query datasets as `datasets.<schema>.<table>` per Hotdata.
+## Ibis Support Overview
+
+`ibis-hotdata` is a read-oriented SQL backend. It is useful for exploring Hotdata workspaces with Ibis expressions, running federated SQL, and materializing results locally, but it is not a full mutable database backend.
+
+Supported today:
+
+- **Connection setup:** `ibis.hotdata.connect(...)` and `ibis.connect("hotdata://...")` with token, workspace, optional sandbox session, TLS, timeout, and polling settings.
+- **Catalog discovery:** `list_catalogs`, `list_databases`, `list_tables`, `current_catalog`, and `current_database` map Hotdata connections and remote schemas into Ibis' catalog/database/table hierarchy.
+- **Table schemas:** `con.table(...)` uses Hotdata information schema column metadata and maps SQL types through Ibis' Postgres type parser.
+- **SQL-backed expressions:** Ibis expressions compile with the Postgres SQLGlot compiler and execute through Hotdata. Common `SELECT` workloads such as projection, filtering, joins, grouping, aggregation, ordering, limits, scalar expressions, and `con.sql(...)` work when the generated SQL is accepted by Hotdata.
+- **Result materialization:** `.execute()` returns pandas objects. `.to_pyarrow()` and `.to_pyarrow_batches()` use the Arrow IPC result data exposed by Hotdata without converting through JSON rows; batches are split locally after the result is downloaded.
+- **Raw SQL escape hatch:** `con.sql("SELECT ...", dialect="postgres")` is the most reliable way to use Hotdata-specific federated table names or SQL that Ibis does not model directly.
+- **Uploads and datasets:** `upload_file` plus `create_dataset_from_upload` can create Hotdata datasets; query them as `datasets.<schema>.<table>` after creation.
+- **Limited `create_table`:** `con.create_table("name", pandas_df)` and `con.create_table("name", pyarrow_table)` serialize local data to Parquet, upload it, and create a Hotdata dataset. Schema-only calls create an empty Parquet-backed dataset.
+- **Dataset-only `drop_table`:** `con.drop_table(...)` deletes matching Hotdata-managed datasets. It does not drop external source tables.
+
+Not supported as full Ibis backend features:
+
+- **General DDL and mutations:** Arbitrary remote `CREATE TABLE` / `DROP TABLE`, inserts, updates, deletes, overwrites, and schema-altering operations are not implemented. `create_table` and `drop_table` are limited to Hotdata datasets as described above.
+- **Temporary tables and in-memory registration:** `supports_temporary_tables` is false, and in-memory tables are not uploaded automatically for joins.
+- **Python UDFs:** `supports_python_udfs` is false.
+- **Transactions and sessions as database state:** Hotdata sandbox sessions can be passed as `session_id`, but the backend does not expose transaction APIs.
+- **Backend-native SQL dialect:** Compilation uses Ibis' Postgres dialect as the closest fit. Hotdata SQL and federation rules are authoritative, so not every Ibis expression that compiles is guaranteed to execute remotely.
+- **Complete Ibis compliance:** The backend is experimental and has focused test coverage for connection, discovery, schema mapping, execution, uploads, and Arrow results. It has not yet been validated against the full Ibis backend test suite.
+- **Hotdata platform APIs beyond SQL datasets:** embeddings, indexes, query history management, sandbox lifecycle management, and other Hotdata-specific APIs are outside the Ibis backend surface.
 
 ## Development
 
 ```bash
-uv sync --group dev   # pytest, ruff, httpx (for examples)
+uv sync   # installs dev group by default (pytest, ruff, httpx for examples)
 uv run pytest
 uv run ruff check src tests examples
 ```
 
-Lockfile CI: `uv sync --locked --group dev && uv run pytest`.
+Lockfile CI: `uv sync --locked && uv run pytest`.
 
 ## TPC-H for the examples
 
@@ -64,12 +99,12 @@ Examples assume something like **`tpch.tpch_sf1.customer`**. Provision TPC-H in 
 
 ## Examples
 
-Needs `HOTDATA_TOKEN` and `HOTDATA_WORKSPACE_ID`.
+Needs `HOTDATA_API_KEY` and `HOTDATA_WORKSPACE`.
 
 ```bash
-uv sync --group dev
-export HOTDATA_TOKEN=…
-export HOTDATA_WORKSPACE_ID=…
+uv sync
+export HOTDATA_API_KEY=…
+export HOTDATA_WORKSPACE=…
 uv run python examples/01_catalog_introspection.py
 uv run python examples/02_execute_sql.py 'SELECT COUNT(*) AS n FROM tpch.tpch_sf1.customer'
 uv run python examples/03_connect_via_url.py

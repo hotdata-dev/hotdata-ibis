@@ -1,0 +1,35 @@
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_pyproject_dependencies_do_not_include_hotdata_runtime() -> None:
+    pyproject_text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r"(?ms)^dependencies\s*=\s*\[(.*?)\]", pyproject_text)
+    assert match is not None
+    dependencies_block = match.group(1)
+    assert "hotdata-runtime" not in dependencies_block
+    assert "hotdata_runtime" not in dependencies_block
+
+
+def test_source_tree_does_not_import_hotdata_runtime() -> None:
+    violations: list[str] = []
+    import_patterns = (
+        re.compile(r"(?m)^\s*from\s+hotdata_runtime(?:\.|\s+import)"),
+        re.compile(r"(?m)^\s*import\s+hotdata_runtime(?:\s|$|,)"),
+    )
+
+    for folder in ("src", "tests", "examples"):
+        for path in (REPO_ROOT / folder).rglob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            if any(pattern.search(text) for pattern in import_patterns):
+                violations.append(str(path.relative_to(REPO_ROOT)))
+
+    assert not violations, (
+        "hotdata-ibis must remain independent from hotdata-runtime; "
+        f"found forbidden imports in: {', '.join(violations)}"
+    )

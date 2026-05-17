@@ -161,9 +161,19 @@ class HotdataClient:
             raise HotdataAPIError("Timeout waiting for asynchronous query")
         raise HotdataAPIError("Unexpected query response type")
 
-    def upload_file(self, data: bytes) -> dict[str, Any]:
-        resp = self._safe_call(self._uploads.upload_file, data)
+    def upload_file(self, data: bytes, *, content_type: str | None = None) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {}
+        if content_type is not None:
+            kwargs["_content_type"] = content_type
+        resp = self._safe_call(self._uploads.upload_file, data, **kwargs)
         return resp.model_dump(by_alias=True, mode="json")
+
+    def list_datasets(self, *, limit: int = 1000, offset: int = 0) -> dict[str, Any]:
+        resp = self._safe_call(self._datasets.list_datasets, limit=limit, offset=offset)
+        return resp.model_dump(by_alias=True, mode="json")
+
+    def delete_dataset(self, dataset_id: str) -> None:
+        self._safe_call(self._datasets.delete_dataset, dataset_id)
 
     def create_dataset_from_upload(
         self,

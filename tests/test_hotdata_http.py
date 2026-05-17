@@ -218,3 +218,71 @@ def test_upload_file_then_create_dataset(httpserver: HTTPServer):
     assert ds["schema_name"] == "main"
     assert ds["table_name"] == "demo_tbl"
     client.close()
+
+
+def test_upload_file_accepts_content_type(httpserver: HTTPServer):
+    def on_upload(req: Request) -> Response:
+        assert req.headers["Content-Type"] == "application/parquet"
+        return Response(
+            json.dumps(
+                {
+                    "id": "upl_1",
+                    "status": "ready",
+                    "size_bytes": len(req.get_data()),
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "content_type": "application/parquet",
+                }
+            ),
+            status=201,
+            content_type="application/json",
+        )
+
+    httpserver.expect_oneshot_request("/v1/files", method="POST").respond_with_handler(on_upload)
+
+    client = HotdataClient(
+        api_url=httpserver.url_for("/").rstrip("/"),
+        token="t",
+        workspace_id="w",
+        verify_ssl=False,
+    )
+    out = client.upload_file(b"parquet", content_type="application/parquet")
+    assert out["id"] == "upl_1"
+    client.close()
+
+
+def test_list_and_delete_datasets(httpserver: HTTPServer):
+    httpserver.expect_oneshot_request("/v1/datasets").respond_with_json(
+        {
+            "count": 1,
+            "datasets": [
+                {
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "id": "ds_1",
+                    "label": "demo",
+                    "latest_version": 1,
+                    "pinned_version": None,
+                    "schema_name": "sch_1",
+                    "table_name": "demo",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                }
+            ],
+            "has_more": False,
+            "limit": 1000,
+            "offset": 0,
+        }
+    )
+    httpserver.expect_oneshot_request("/v1/datasets/ds_1", method="DELETE").respond_with_data(
+        b"", status=204
+    )
+
+    client = HotdataClient(
+        api_url=httpserver.url_for("/").rstrip("/"),
+        token="t",
+        workspace_id="w",
+        verify_ssl=False,
+    )
+
+    datasets = client.list_datasets()
+    assert datasets["datasets"][0]["id"] == "ds_1"
+    client.delete_dataset("ds_1")
+    client.close()

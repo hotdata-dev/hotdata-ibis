@@ -8,7 +8,7 @@ qualifiers aligned with working ``SELECT ... FROM tpch.tpch_sf1.*`` queries.
 
 From the repo root::
 
-    HOTDATA_TOKEN=... HOTDATA_WORKSPACE_ID=... \\
+    HOTDATA_API_KEY=... HOTDATA_WORKSPACE=... \\
       uv run python examples/04_ibis_table_workflows.py
 """
 
