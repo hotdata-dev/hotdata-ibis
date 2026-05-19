@@ -339,8 +339,19 @@ class Backend(
             )
         return conn
 
-    def _connection_id(self, name_or_id: str) -> str:
-        return self._resolve_connection(name_or_id)["id"]
+    def _managed_table_synced(
+        self,
+        connection_id: str,
+        schema_name: str,
+        table_name: str,
+    ) -> bool:
+        for row in self._iterate_information_schema(
+            {"connection_id": connection_id, "schema": schema_name, "table": table_name},
+            include_columns=False,
+        ):
+            if row["table"] == table_name and row["schema"] == schema_name:
+                return bool(row.get("synced", True))
+        return False
 
     def _table_location(
         self,
@@ -362,9 +373,8 @@ class Backend(
                 raise com.IbisInputError(
                     "create_table with database=schema requires default_connection or current catalog"
                 )
-        conn_id = self._connection_id(conn)
-        self._resolve_managed_connection(conn)
-        return conn_id, schema
+        conn_record = self._resolve_managed_connection(conn)
+        return conn_record["id"], schema
 
     # --- schema / sql execution --------------------------------------------
 
@@ -588,15 +598,24 @@ class Backend(
         temp: bool = False,
         overwrite: bool = False,
     ) -> ir.Table:
+        """Upload local data into a declared managed table.
+
+        Hotdata loads always use ``replace`` mode (the only API option). When
+        ``overwrite=False`` (the Ibis default), an existing synced table raises
+        :class:`~ibis.common.exceptions.IbisInputError` instead of replacing it.
+        """
         if temp:
             raise NotImplementedError("Hotdata does not support temporary tables.")
-        del overwrite  # loads always use replace mode (only API option)
 
         if obj is not None and schema is not None:
             raise com.IbisInputError("create_table accepts only one of obj or schema")
 
         data = self._local_table_to_parquet(obj, schema)
         connection_id, schema_name = self._table_location(database)
+        if not overwrite and self._managed_table_synced(connection_id, schema_name, name):
+            raise com.IbisInputError(
+                f"Table {name!r} already exists; pass overwrite=True to replace"
+            )
         upload = self.upload_file(data, content_type="application/parquet")
         try:
             self._http.load_managed_table(

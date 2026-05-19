@@ -69,7 +69,7 @@ Supported today:
 - **Result materialization:** `.execute()` returns pandas objects. `.to_pyarrow()` and `.to_pyarrow_batches()` use the Arrow IPC result data exposed by Hotdata without converting through JSON rows; batches are split locally after the result is downloaded.
 - **Raw SQL escape hatch:** `con.sql("SELECT ...", dialect="postgres")` is the most reliable way to use Hotdata-specific federated table names or SQL that Ibis does not model directly.
 - **Managed database lifecycle:** `create_database("sales", schema="public", tables=["orders"])` registers a managed connection (Ibis catalog). `create_table("orders", pandas_df, database=("sales", "public"))` uploads Parquet and loads it with replace mode. Query as `sales.public.orders` in SQL. `drop_table` clears a managed table; `drop_database` deletes the connection.
-- **Parquet uploads:** `create_table` accepts pandas DataFrames, PyArrow tables, or schema-only empty tables. Tables must live in a managed connection — declare them with `create_database(..., tables=[...])` first.
+- **Parquet uploads:** `create_table` accepts pandas DataFrames, PyArrow tables, or schema-only empty tables. Tables must live in a managed connection — declare them with `create_database(..., tables=[...])` first. Loads always use replace mode; pass `overwrite=True` to replace an existing synced table (the default `overwrite=False` raises if the table already exists).
 
 Not supported as full Ibis backend features:
 

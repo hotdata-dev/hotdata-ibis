@@ -86,6 +86,7 @@ def mock_managed_create_table_flow(
     schema_name: str = PUBLIC,
     columns: list[dict],
     on_upload: Callable[[Request], Response] | None = None,
+    table_exists: bool = False,
 ) -> None:
     httpserver.expect_request("/v1/connections").respond_with_json(managed_connections_response())
 
@@ -130,9 +131,24 @@ def mock_managed_create_table_flow(
         f"/v1/connections/{MANAGED_CONN}/schemas/{schema_name}/tables/{table_name}/loads",
         method="POST",
     ).respond_with_handler(on_load)
-    httpserver.expect_request("/v1/information_schema").respond_with_json(
-        information_schema_response(table_name, schema_name, columns)
-    )
+
+    info_calls = {"n": 0}
+
+    def on_information_schema(req: Request) -> Response:
+        info_calls["n"] += 1
+        if table_exists or info_calls["n"] > 1:
+            payload = information_schema_response(table_name, schema_name, columns)
+        else:
+            payload = {
+                "count": 0,
+                "tables": [],
+                "has_more": False,
+                "next_cursor": None,
+                "limit": 500,
+            }
+        return Response(json.dumps(payload), status=200, content_type="application/json")
+
+    httpserver.expect_request("/v1/information_schema").respond_with_handler(on_information_schema)
 
 
 def test_connect_via_url(httpserver: HTTPServer, srv: str):
@@ -421,6 +437,7 @@ def test_create_table_overwrite_loads_with_replace(httpserver: HTTPServer, srv: 
         httpserver,
         table_name="demo",
         columns=[{"name": "x", "data_type": "BIGINT", "nullable": True}],
+        table_exists=True,
     )
 
     con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
@@ -430,6 +447,24 @@ def test_create_table_overwrite_loads_with_replace(httpserver: HTTPServer, srv: 
         database=(MANAGED_CONN, PUBLIC),
         overwrite=True,
     )
+
+
+def test_create_table_without_overwrite_rejects_existing_table(httpserver: HTTPServer, srv: str):
+    mock_managed_create_table_flow(
+        httpserver,
+        table_name="demo",
+        columns=[{"name": "x", "data_type": "BIGINT", "nullable": True}],
+        table_exists=True,
+    )
+
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+
+    with pytest.raises(com.IbisInputError, match="already exists"):
+        con.create_table(
+            "demo",
+            pd.DataFrame({"x": [1]}),
+            database=(MANAGED_CONN, PUBLIC),
+        )
 
 
 def test_create_database_posts_managed_connection(httpserver: HTTPServer, srv: str):
