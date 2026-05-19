@@ -240,7 +240,7 @@ def test_create_table_from_pandas_uploads_parquet_dataset(httpserver: HTTPServer
         body = req.get_json()
         assert body == {
             "label": "demo",
-            "source": {"upload_id": "upl_1", "format": "parquet"},
+            "source": {"type": "upload", "upload_id": "upl_1", "format": "parquet"},
             "table_name": "demo",
         }
         return Response(

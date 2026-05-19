@@ -185,7 +185,7 @@ def test_upload_file_then_create_dataset(httpserver: HTTPServer):
     def on_dataset(req: Request) -> Response:
         body = req.get_json()
         assert body["label"] == "demo"
-        assert body["source"] == {"upload_id": "upl_1", "format": "csv"}
+        assert body["source"] == {"type": "upload", "upload_id": "upl_1", "format": "csv"}
         assert body.get("table_name") == "demo_tbl"
         payload = {
             "id": "ds_1",

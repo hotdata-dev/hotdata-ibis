@@ -23,8 +23,9 @@ from hotdata.api import (
     UploadsApi,
 )
 from hotdata.exceptions import ApiException
-from hotdata.models import CreateDatasetRequest, DatasetSource, QueryRequest, UploadDatasetSource
+from hotdata.models import CreateDatasetRequest, DatasetSource, QueryRequest
 from hotdata.models.async_query_response import AsyncQueryResponse
+from hotdata.models.dataset_source_one_of import DatasetSourceOneOf
 
 T = TypeVar("T")
 
@@ -183,7 +184,13 @@ class HotdataClient:
         table_name: str | None = None,
         file_format: str = "csv",
     ) -> dict[str, Any]:
-        src = DatasetSource(UploadDatasetSource(upload_id=upload_id, format=file_format))
+        src = DatasetSource(
+            DatasetSourceOneOf(
+                type="upload",
+                upload_id=upload_id,
+                format=file_format,
+            )
+        )
         fields: dict[str, Any] = {"label": label, "source": src}
         if table_name is not None:
             fields["table_name"] = table_name

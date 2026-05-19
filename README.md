@@ -2,7 +2,7 @@
 
 Experimental [Ibis](https://ibis-project.org/) backend for [Hotdata](https://www.hotdata.dev/docs/api-reference): compile expressions with Ibis, run federated SQL over the Hotdata API. REST calls use the official **[hotdata](https://github.com/hotdata-dev/sdk-python)** Python SDK. Repo examples use **httpx** (listed under the **dev** dependency group).
 
-**Requirements:** Python 3.10+, **ibis-framework** 10.x, **hotdata** ≥0.1.
+**Requirements:** Python 3.10+, **ibis-framework** 10.x, **hotdata** ≥0.2.
 
 ## Install
 
