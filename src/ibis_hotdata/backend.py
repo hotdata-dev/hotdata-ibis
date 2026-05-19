@@ -519,13 +519,17 @@ class Backend(
                 "Hotdata create_database creates a managed connection (catalog); catalog= is not supported"
             )
         try:
-            self._resolve_connection(name)
+            existing = self._resolve_connection(name)
         except com.IbisError:
-            pass
-        else:
+            existing = None
+        if existing is not None:
             if not force:
                 raise com.IbisInputError(f"Managed database {name!r} already exists")
-            self._resolve_managed_connection(name)
+            if existing.get("source_type") != MANAGED_SOURCE_TYPE:
+                raise com.IbisInputError(
+                    f"{name!r} is not a managed database "
+                    f"(source_type={existing.get('source_type')!r})"
+                )
             return
         try:
             self._http.create_managed_database(name, schema=schema, tables=list(tables or ()))
@@ -547,6 +551,8 @@ class Backend(
             )
         try:
             conn = self._resolve_managed_connection(name)
+        except com.IbisInputError:
+            raise
         except com.IbisError:
             if force:
                 return
@@ -638,6 +644,8 @@ class Backend(
     ) -> None:
         try:
             connection_id, schema_name = self._table_location(database)
+        except com.IbisInputError:
+            raise
         except com.IbisError:
             if force:
                 return

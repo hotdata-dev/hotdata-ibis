@@ -532,6 +532,17 @@ def test_drop_table_raises_for_non_managed_connection(httpserver: HTTPServer, sr
         con.drop_table("demo", database=(TPCH_CONN, PUBLIC))
 
 
+def test_drop_table_force_still_raises_for_non_managed_connection(httpserver: HTTPServer, srv: str):
+    httpserver.expect_request("/v1/connections").respond_with_json(
+        {"connections": [{"id": TPCH_CONN, "name": "TPC-H", "source_type": "duckdb"}]}
+    )
+
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+
+    with pytest.raises(com.IbisInputError, match="not a managed database"):
+        con.drop_table("demo", database=(TPCH_CONN, PUBLIC), force=True)
+
+
 def test_drop_database_deletes_managed_connection(httpserver: HTTPServer, srv: str):
     httpserver.expect_request("/v1/connections").respond_with_json(managed_connections_response())
     httpserver.expect_request(f"/v1/connections/{MANAGED_CONN}", method="DELETE").respond_with_data(
@@ -540,6 +551,24 @@ def test_drop_database_deletes_managed_connection(httpserver: HTTPServer, srv: s
 
     con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
     con.drop_database(MANAGED_NAME)
+
+
+def test_drop_database_force_ignores_unknown_connection(httpserver: HTTPServer, srv: str):
+    httpserver.expect_request("/v1/connections").respond_with_json({"connections": []})
+
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+    con.drop_database("missing", force=True)
+
+
+def test_drop_database_force_raises_for_non_managed_connection(httpserver: HTTPServer, srv: str):
+    httpserver.expect_request("/v1/connections").respond_with_json(
+        {"connections": [{"id": TPCH_CONN, "name": "TPC-H", "source_type": "duckdb"}]}
+    )
+
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+
+    with pytest.raises(com.IbisInputError, match="not a managed database"):
+        con.drop_database("TPC-H", force=True)
 
 
 def test_compile_scalar_no_roundtrip(httpserver: HTTPServer, srv: str):
