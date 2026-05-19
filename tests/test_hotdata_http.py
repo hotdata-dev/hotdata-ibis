@@ -167,7 +167,7 @@ def test_list_connections_raises_on_http_error(httpserver: HTTPServer):
     client.close()
 
 
-def test_upload_file_then_create_dataset(httpserver: HTTPServer):
+def test_upload_file_then_load_managed_table(httpserver: HTTPServer):
     httpserver.expect_oneshot_request(
         "/v1/files",
         method="POST",
@@ -177,28 +177,73 @@ def test_upload_file_then_create_dataset(httpserver: HTTPServer):
             "status": "ready",
             "size_bytes": 3,
             "created_at": "2026-01-01T00:00:00Z",
-            "content_type": None,
+            "content_type": "application/parquet",
         },
         status=201,
     )
 
-    def on_dataset(req: Request) -> Response:
+    def on_load(req: Request) -> Response:
         body = req.get_json()
-        assert body["label"] == "demo"
-        assert body["source"] == {"type": "upload", "upload_id": "upl_1", "format": "csv"}
-        assert body.get("table_name") == "demo_tbl"
+        assert body == {"mode": "replace", "upload_id": "upl_1"}
         payload = {
-            "id": "ds_1",
-            "label": "demo",
-            "schema_name": "main",
+            "connection_id": "conn_sales",
+            "schema_name": "public",
             "table_name": "demo_tbl",
-            "status": "ready",
-            "created_at": "2026-01-01T00:00:00Z",
+            "row_count": 1,
+            "arrow_schema_json": "{}",
         }
-        return Response(json.dumps(payload), status=201, content_type="application/json")
+        return Response(json.dumps(payload), status=200, content_type="application/json")
 
-    httpserver.expect_oneshot_request("/v1/datasets", method="POST").respond_with_handler(
-        on_dataset
+    httpserver.expect_oneshot_request(
+        "/v1/connections/conn_sales/schemas/public/tables/demo_tbl/loads",
+        method="POST",
+    ).respond_with_handler(on_load)
+
+    client = HotdataClient(
+        api_url=httpserver.url_for("/").rstrip("/"),
+        token="t",
+        workspace_id="w",
+        verify_ssl=False,
+    )
+    up = client.upload_file(b"parquet", content_type="application/parquet")
+    assert up["id"] == "upl_1"
+    loaded = client.load_managed_table(
+        "conn_sales",
+        "public",
+        "demo_tbl",
+        upload_id=up["id"],
+    )
+    assert loaded["table_name"] == "demo_tbl"
+    client.close()
+
+
+def test_create_managed_database(httpserver: HTTPServer):
+    def on_create(req: Request) -> Response:
+        body = req.get_json()
+        assert body == {
+            "name": "sales",
+            "source_type": "managed",
+            "config": {
+                "schemas": [{"name": "public", "tables": [{"name": "orders"}]}],
+            },
+            "skip_discovery": True,
+        }
+        return Response(
+            json.dumps(
+                {
+                    "id": "conn_sales",
+                    "name": "sales",
+                    "source_type": "managed",
+                    "discovery_status": "skipped",
+                    "tables_discovered": 0,
+                }
+            ),
+            status=201,
+            content_type="application/json",
+        )
+
+    httpserver.expect_oneshot_request("/v1/connections", method="POST").respond_with_handler(
+        on_create
     )
 
     client = HotdataClient(
@@ -207,16 +252,29 @@ def test_upload_file_then_create_dataset(httpserver: HTTPServer):
         workspace_id="w",
         verify_ssl=False,
     )
-    up = client.upload_file(b"a,b\n1,2")
-    assert up["id"] == "upl_1"
-    ds = client.create_dataset_from_upload(
-        upload_id=up["id"],
-        label="demo",
-        table_name="demo_tbl",
-        file_format="csv",
+    out = client.create_managed_database("sales", schema="public", tables=["orders"])
+    assert out["id"] == "conn_sales"
+    client.close()
+
+
+def test_delete_managed_table_and_connection(httpserver: HTTPServer):
+    httpserver.expect_oneshot_request(
+        "/v1/connections/conn_sales/schemas/public/tables/demo",
+        method="DELETE",
+    ).respond_with_data(b"", status=204)
+    httpserver.expect_oneshot_request(
+        "/v1/connections/conn_sales",
+        method="DELETE",
+    ).respond_with_data(b"", status=204)
+
+    client = HotdataClient(
+        api_url=httpserver.url_for("/").rstrip("/"),
+        token="t",
+        workspace_id="w",
+        verify_ssl=False,
     )
-    assert ds["schema_name"] == "main"
-    assert ds["table_name"] == "demo_tbl"
+    client.delete_managed_table("conn_sales", "public", "demo")
+    client.delete_connection("conn_sales")
     client.close()
 
 
@@ -247,42 +305,4 @@ def test_upload_file_accepts_content_type(httpserver: HTTPServer):
     )
     out = client.upload_file(b"parquet", content_type="application/parquet")
     assert out["id"] == "upl_1"
-    client.close()
-
-
-def test_list_and_delete_datasets(httpserver: HTTPServer):
-    httpserver.expect_oneshot_request("/v1/datasets").respond_with_json(
-        {
-            "count": 1,
-            "datasets": [
-                {
-                    "created_at": "2026-01-01T00:00:00Z",
-                    "id": "ds_1",
-                    "label": "demo",
-                    "latest_version": 1,
-                    "pinned_version": None,
-                    "schema_name": "sch_1",
-                    "table_name": "demo",
-                    "updated_at": "2026-01-01T00:00:00Z",
-                }
-            ],
-            "has_more": False,
-            "limit": 1000,
-            "offset": 0,
-        }
-    )
-    httpserver.expect_oneshot_request("/v1/datasets/ds_1", method="DELETE").respond_with_data(
-        b"", status=204
-    )
-
-    client = HotdataClient(
-        api_url=httpserver.url_for("/").rstrip("/"),
-        token="t",
-        workspace_id="w",
-        verify_ssl=False,
-    )
-
-    datasets = client.list_datasets()
-    assert datasets["datasets"][0]["id"] == "ds_1"
-    client.delete_dataset("ds_1")
     client.close()

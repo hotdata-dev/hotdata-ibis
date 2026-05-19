@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import json
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, TypeVar
 
 import pyarrow as pa
@@ -15,7 +15,6 @@ import pyarrow.ipc as pa_ipc
 from hotdata import ApiClient, Configuration
 from hotdata.api import (
     ConnectionsApi,
-    DatasetsApi,
     InformationSchemaApi,
     QueryApi,
     QueryRunsApi,
@@ -23,9 +22,11 @@ from hotdata.api import (
     UploadsApi,
 )
 from hotdata.exceptions import ApiException
-from hotdata.models import CreateDatasetRequest, DatasetSource, QueryRequest
+from hotdata.models import CreateConnectionRequest, QueryRequest
 from hotdata.models.async_query_response import AsyncQueryResponse
-from hotdata.models.dataset_source_one_of import DatasetSourceOneOf
+from hotdata.models.load_managed_table_request import LoadManagedTableRequest
+
+from ibis_hotdata.managed import DEFAULT_SCHEMA, MANAGED_SOURCE_TYPE, build_managed_config
 
 T = TypeVar("T")
 
@@ -95,7 +96,6 @@ class HotdataClient:
         self._connections = ConnectionsApi(self._client)
         self._information_schema = InformationSchemaApi(self._client)
         self._uploads = UploadsApi(self._client)
-        self._datasets = DatasetsApi(self._client)
 
     def close(self) -> None:
         client = self._client
@@ -169,34 +169,50 @@ class HotdataClient:
         resp = self._safe_call(self._uploads.upload_file, data, **kwargs)
         return resp.model_dump(by_alias=True, mode="json")
 
-    def list_datasets(self, *, limit: int = 1000, offset: int = 0) -> dict[str, Any]:
-        resp = self._safe_call(self._datasets.list_datasets, limit=limit, offset=offset)
+    def create_managed_database(
+        self,
+        name: str,
+        *,
+        schema: str = DEFAULT_SCHEMA,
+        tables: Sequence[str] = (),
+    ) -> dict[str, Any]:
+        req = CreateConnectionRequest(
+            name=name,
+            source_type=MANAGED_SOURCE_TYPE,
+            config=build_managed_config(schema, list(tables)),
+            skip_discovery=True,
+        )
+        resp = self._safe_call(self._connections.create_connection, req)
         return resp.model_dump(by_alias=True, mode="json")
 
-    def delete_dataset(self, dataset_id: str) -> None:
-        self._safe_call(self._datasets.delete_dataset, dataset_id)
+    def delete_connection(self, connection_id: str) -> None:
+        self._safe_call(self._connections.delete_connection, connection_id)
 
-    def create_dataset_from_upload(
+    def load_managed_table(
         self,
+        connection_id: str,
+        schema: str,
+        table: str,
         *,
         upload_id: str,
-        label: str,
-        table_name: str | None = None,
-        file_format: str = "csv",
     ) -> dict[str, Any]:
-        src = DatasetSource(
-            DatasetSourceOneOf(
-                type="upload",
-                upload_id=upload_id,
-                format=file_format,
-            )
+        req = LoadManagedTableRequest(mode="replace", upload_id=upload_id)
+        resp = self._safe_call(
+            self._connections.load_managed_table,
+            connection_id,
+            schema,
+            table,
+            req,
         )
-        fields: dict[str, Any] = {"label": label, "source": src}
-        if table_name is not None:
-            fields["table_name"] = table_name
-        req = CreateDatasetRequest(**fields)
-        resp = self._safe_call(self._datasets.create_dataset, req)
         return resp.model_dump(by_alias=True, mode="json")
+
+    def delete_managed_table(self, connection_id: str, schema: str, table: str) -> None:
+        self._safe_call(
+            self._connections.delete_managed_table,
+            connection_id,
+            schema,
+            table,
+        )
 
     def _poll_result_arrow(
         self,

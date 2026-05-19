@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import io
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from functools import cached_property
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
@@ -33,6 +33,7 @@ import ibis.expr.types as ir
 import sqlglot as sg
 import sqlglot.expressions as sge
 from ibis.backends import (
+    CanCreateDatabase,
     CanListCatalog,
     CanListDatabase,
     HasCurrentCatalog,
@@ -42,6 +43,7 @@ from ibis.backends import (
 from ibis.backends.sql import SQLBackend
 
 from ibis_hotdata.http import HotdataAPIError, HotdataClient
+from ibis_hotdata.managed import DEFAULT_SCHEMA, MANAGED_SOURCE_TYPE
 from ibis_hotdata.types import dtype_from_hotdata_sql_type
 
 _INFORMATION_SCHEMA_PAGE_SIZE = 500
@@ -59,6 +61,7 @@ if TYPE_CHECKING:
 
 class Backend(
     SQLBackend,
+    CanCreateDatabase,
     CanListCatalog,
     CanListDatabase,
     HasCurrentCatalog,
@@ -320,44 +323,48 @@ class Backend(
             if cursor is None:
                 break
 
-    def _iterate_datasets(self) -> Iterable[dict[str, Any]]:
-        offset = 0
-        limit = 1000
-        while True:
-            chunk = self._http.list_datasets(limit=limit, offset=offset)
-            yield from chunk["datasets"]
-            if not chunk.get("has_more"):
-                break
-            offset += limit
+    def _resolve_connection(self, name_or_id: str) -> dict[str, Any]:
+        data = self._http.list_connections()
+        for conn in data["connections"]:
+            if conn["id"] == name_or_id or conn.get("name") == name_or_id:
+                return conn
+        raise com.IbisError(f"Unknown Hotdata connection {name_or_id!r}")
 
-    def _dataset_database(self, database: tuple[str, str] | str | None) -> str | None:
-        if database is None:
-            return None
-        table_loc = self._to_sqlglot_table(database)
-        catalog, schema_name = self._to_catalog_db_tuple(table_loc)
-        if catalog and catalog != "datasets":
-            return "__not_datasets__"
-        return schema_name or catalog
-
-    def _find_dataset(
-        self, table_name: str, database: tuple[str, str] | str | None
-    ) -> dict[str, Any]:
-        schema_name = self._dataset_database(database)
-        if schema_name == "__not_datasets__":
-            raise com.TableNotFound(table_name)
-        matches = [
-            ds
-            for ds in self._iterate_datasets()
-            if ds["table_name"] == table_name
-            and (schema_name is None or ds["schema_name"] == schema_name)
-        ]
-        if not matches:
-            raise com.TableNotFound(table_name)
-        if len(matches) > 1:
+    def _resolve_managed_connection(self, name_or_id: str) -> dict[str, Any]:
+        conn = self._resolve_connection(name_or_id)
+        if conn.get("source_type") != MANAGED_SOURCE_TYPE:
             raise com.IbisInputError(
-                f"Multiple Hotdata datasets named {table_name!r}; pass database=('datasets', schema)."
+                f"{name_or_id!r} is not a managed database "
+                f"(source_type={conn.get('source_type')!r})"
             )
-        return matches[0]
+        return conn
+
+    def _connection_id(self, name_or_id: str) -> str:
+        return self._resolve_connection(name_or_id)["id"]
+
+    def _table_location(
+        self,
+        database: tuple[str, str] | str | None,
+    ) -> tuple[str, str]:
+        if database is None:
+            if self._default_connection is None or self._default_schema is None:
+                raise com.IbisInputError(
+                    "Requires database=(catalog, schema) or default_connection and default_schema"
+                )
+            conn = self._default_connection
+            schema = self._default_schema
+        elif isinstance(database, tuple):
+            conn, schema = database
+        else:
+            conn = self._default_connection or self.current_catalog
+            schema = database
+            if conn is None:
+                raise com.IbisInputError(
+                    "create_table with database=schema requires default_connection or current catalog"
+                )
+        conn_id = self._connection_id(conn)
+        self._resolve_managed_connection(conn)
+        return conn_id, schema
 
     # --- schema / sql execution --------------------------------------------
 
@@ -480,33 +487,65 @@ class Backend(
         )
 
     def upload_file(self, data: bytes, *, content_type: str | None = None) -> dict[str, Any]:
-        """POST ``/v1/files``; returns the upload record (use ``id`` with :meth:`create_dataset_from_upload`)."""
+        """POST ``/v1/files``; returns the upload record (use ``id`` with managed table loads)."""
         try:
             return self._http.upload_file(data, content_type=content_type)
         except HotdataAPIError as exc:
             raise _ibis_err_from_hotdata(exc) from exc
 
-    def create_dataset_from_upload(
+    def create_database(
         self,
-        upload_id: str,
-        label: str,
+        name: str,
+        /,
         *,
-        table_name: str | None = None,
-        file_format: str = "csv",
-    ) -> dict[str, Any]:
-        """POST ``/v1/datasets`` with an upload source—materializes a queryable dataset table.
-
-        The response includes ``schema_name`` and ``table_name``. Reference the table in SQL as
-        ``datasets.<schema_name>.<table_name>`` (see Hotdata ``datasets`` documentation).
-        """
-        try:
-            return self._http.create_dataset_from_upload(
-                upload_id=upload_id,
-                label=label,
-                table_name=table_name,
-                file_format=file_format,
+        catalog: str | None = None,
+        schema: str = DEFAULT_SCHEMA,
+        tables: Sequence[str] | None = None,
+        force: bool = False,
+    ) -> None:
+        """Create a managed Hotdata connection (Ibis catalog) with optional declared tables."""
+        if catalog is not None:
+            raise com.UnsupportedOperationError(
+                "Hotdata create_database creates a managed connection (catalog); catalog= is not supported"
             )
+        try:
+            self._resolve_connection(name)
+        except com.IbisError:
+            pass
+        else:
+            if not force:
+                raise com.IbisInputError(f"Managed database {name!r} already exists")
+            self._resolve_managed_connection(name)
+            return
+        try:
+            self._http.create_managed_database(name, schema=schema, tables=list(tables or ()))
         except HotdataAPIError as exc:
+            raise _ibis_err_from_hotdata(exc) from exc
+
+    def drop_database(
+        self,
+        name: str,
+        /,
+        *,
+        catalog: str | None = None,
+        force: bool = False,
+    ) -> None:
+        """Delete a managed Hotdata connection (Ibis catalog)."""
+        if catalog is not None:
+            raise com.UnsupportedOperationError(
+                "Hotdata drop_database deletes a managed connection (catalog); catalog= is not supported"
+            )
+        try:
+            conn = self._resolve_managed_connection(name)
+        except com.IbisError:
+            if force:
+                return
+            raise
+        try:
+            self._http.delete_connection(conn["id"])
+        except HotdataAPIError as exc:
+            if force and exc.status_code == 404:
+                return
             raise _ibis_err_from_hotdata(exc) from exc
 
     def _local_table_to_parquet(self, obj: Any, schema: sch.Schema | None):
@@ -545,26 +584,30 @@ class Backend(
         obj: Any = None,
         *,
         schema: sch.Schema | None = None,
-        database: str | None = None,
+        database: tuple[str, str] | str | None = None,
         temp: bool = False,
         overwrite: bool = False,
     ) -> ir.Table:
         if temp:
             raise NotImplementedError("Hotdata does not support temporary tables.")
-        if overwrite:
-            raise NotImplementedError("Hotdata create_table does not support overwrite.")
-        if database is not None:
-            raise NotImplementedError("Hotdata datasets choose their schema at creation time.")
+        del overwrite  # loads always use replace mode (only API option)
+
+        if obj is not None and schema is not None:
+            raise com.IbisInputError("create_table accepts only one of obj or schema")
 
         data = self._local_table_to_parquet(obj, schema)
+        connection_id, schema_name = self._table_location(database)
         upload = self.upload_file(data, content_type="application/parquet")
-        dataset = self.create_dataset_from_upload(
-            upload_id=upload["id"],
-            label=name,
-            table_name=name,
-            file_format="parquet",
-        )
-        return self.table(dataset["table_name"], database=("datasets", dataset["schema_name"]))
+        try:
+            self._http.load_managed_table(
+                connection_id,
+                schema_name,
+                name,
+                upload_id=upload["id"],
+            )
+        except HotdataAPIError as exc:
+            raise _ibis_err_from_hotdata(exc) from exc
+        return self.table(name, database=(connection_id, schema_name))
 
     def drop_table(
         self,
@@ -575,14 +618,16 @@ class Backend(
         force: bool = False,
     ) -> None:
         try:
-            dataset = self._find_dataset(name, database)
-        except com.TableNotFound:
+            connection_id, schema_name = self._table_location(database)
+        except com.IbisError:
             if force:
                 return
             raise
         try:
-            self._http.delete_dataset(dataset["id"])
+            self._http.delete_managed_table(connection_id, schema_name, name)
         except HotdataAPIError as exc:
+            if force and exc.status_code == 404:
+                return
             raise _ibis_err_from_hotdata(exc) from exc
 
     def _register_in_memory_table(self, _op: ops.InMemoryTable) -> None:
