@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import io
 import json
 
@@ -15,7 +17,10 @@ from werkzeug.wrappers import Request, Response
 pytest.importorskip("pytest_httpserver")
 from pytest_httpserver import HTTPServer
 
-# Federated identifiers for mocked Hotdata (matches SQL shape ``tpch.tpch_sf1.customer``).
+# Managed database identifiers for mocked Hotdata (SQL shape ``sales.public.orders``).
+MANAGED_CONN = "conn_sales"
+MANAGED_NAME = "sales"
+PUBLIC = "public"
 TPCH_CONN = "tpch"
 TPCH_SF1 = "tpch_sf1"
 TPCH_CUSTOMER_COLS = [
@@ -37,30 +42,25 @@ def arrow_stream(table: pa.Table) -> bytes:
     return sink.getvalue()
 
 
-def dataset_list_response(*datasets: dict, has_more: bool = False, offset: int = 0) -> dict:
+def managed_connections_response() -> dict:
     return {
-        "count": len(datasets),
-        "datasets": list(datasets),
-        "has_more": has_more,
-        "limit": 1000,
-        "offset": offset,
+        "connections": [
+            {
+                "id": MANAGED_CONN,
+                "name": MANAGED_NAME,
+                "source_type": "managed",
+            }
+        ]
     }
 
 
-def dataset_summary(dataset_id: str, table_name: str, schema_name: str = "sch_1") -> dict:
-    return {
-        "created_at": "2026-01-01T00:00:00Z",
-        "id": dataset_id,
-        "label": table_name,
-        "latest_version": 1,
-        "pinned_version": None,
-        "schema_name": schema_name,
-        "table_name": table_name,
-        "updated_at": "2026-01-01T00:00:00Z",
-    }
-
-
-def information_schema_response(table_name: str, schema_name: str, columns: list[dict]) -> dict:
+def information_schema_response(
+    table_name: str,
+    schema_name: str,
+    columns: list[dict],
+    *,
+    connection: str = MANAGED_CONN,
+) -> dict:
     return {
         "count": 1,
         "has_more": False,
@@ -68,7 +68,7 @@ def information_schema_response(table_name: str, schema_name: str, columns: list
         "next_cursor": None,
         "tables": [
             {
-                "connection": "datasets",
+                "connection": connection,
                 "schema": schema_name,
                 "table": table_name,
                 "synced": True,
@@ -77,6 +77,78 @@ def information_schema_response(table_name: str, schema_name: str, columns: list
             }
         ],
     }
+
+
+def mock_managed_create_table_flow(
+    httpserver: HTTPServer,
+    *,
+    table_name: str,
+    schema_name: str = PUBLIC,
+    columns: list[dict],
+    on_upload: Callable[[Request], Response] | None = None,
+    table_exists: bool = False,
+) -> None:
+    httpserver.expect_request("/v1/connections").respond_with_json(managed_connections_response())
+
+    def default_upload(req: Request) -> Response:
+        assert req.headers["Content-Type"] == "application/parquet"
+        return Response(
+            json.dumps(
+                {
+                    "id": "upl_1",
+                    "status": "ready",
+                    "size_bytes": len(req.get_data()),
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "content_type": "application/parquet",
+                }
+            ),
+            status=201,
+            content_type="application/json",
+        )
+
+    httpserver.expect_request("/v1/files", method="POST").respond_with_handler(
+        on_upload or default_upload
+    )
+
+    def on_load(req: Request) -> Response:
+        body = req.get_json()
+        assert body == {"mode": "replace", "upload_id": "upl_1"}
+        return Response(
+            json.dumps(
+                {
+                    "connection_id": MANAGED_CONN,
+                    "schema_name": schema_name,
+                    "table_name": table_name,
+                    "row_count": 1,
+                    "arrow_schema_json": "{}",
+                }
+            ),
+            status=200,
+            content_type="application/json",
+        )
+
+    httpserver.expect_request(
+        f"/v1/connections/{MANAGED_CONN}/schemas/{schema_name}/tables/{table_name}/loads",
+        method="POST",
+    ).respond_with_handler(on_load)
+
+    info_calls = {"n": 0}
+
+    def on_information_schema(req: Request) -> Response:
+        info_calls["n"] += 1
+        if table_exists or info_calls["n"] > 1:
+            payload = information_schema_response(table_name, schema_name, columns)
+        else:
+            payload = {
+                "count": 0,
+                "tables": [],
+                "has_more": False,
+                "next_cursor": None,
+                "limit": 500,
+            }
+        return Response(json.dumps(payload), status=200, content_type="application/json")
+
+    httpserver.expect_request("/v1/information_schema").respond_with_handler(on_information_schema)
 
 
 def test_connect_via_url(httpserver: HTTPServer, srv: str):
@@ -216,11 +288,10 @@ def test_to_pyarrow_batches_uses_arrow_result(httpserver: HTTPServer, srv: str):
     assert out.to_pydict() == {"x": [1, 2, 3]}
 
 
-def test_create_table_from_pandas_uploads_parquet_dataset(httpserver: HTTPServer, srv: str):
+def test_create_table_from_pandas_uploads_managed_table(httpserver: HTTPServer, srv: str):
     uploaded: dict[str, pa.Table] = {}
 
     def on_upload(req: Request) -> Response:
-        assert req.headers["Content-Type"] == "application/parquet"
         uploaded["table"] = pq.read_table(io.BytesIO(req.get_data()))
         return Response(
             json.dumps(
@@ -236,36 +307,11 @@ def test_create_table_from_pandas_uploads_parquet_dataset(httpserver: HTTPServer
             content_type="application/json",
         )
 
-    def on_dataset(req: Request) -> Response:
-        body = req.get_json()
-        assert body == {
-            "label": "demo",
-            "source": {"upload_id": "upl_1", "format": "parquet"},
-            "table_name": "demo",
-        }
-        return Response(
-            json.dumps(
-                {
-                    "id": "ds_1",
-                    "label": "demo",
-                    "schema_name": "sch_1",
-                    "table_name": "demo",
-                    "status": "ready",
-                    "created_at": "2026-01-01T00:00:00Z",
-                }
-            ),
-            status=201,
-            content_type="application/json",
-        )
-
-    httpserver.expect_request("/v1/files", method="POST").respond_with_handler(on_upload)
-    httpserver.expect_request("/v1/datasets", method="POST").respond_with_handler(on_dataset)
-    httpserver.expect_request("/v1/information_schema").respond_with_json(
-        information_schema_response(
-            "demo",
-            "sch_1",
-            [{"name": "x", "data_type": "BIGINT", "nullable": True}],
-        )
+    mock_managed_create_table_flow(
+        httpserver,
+        table_name="demo",
+        columns=[{"name": "x", "data_type": "BIGINT", "nullable": True}],
+        on_upload=on_upload,
     )
 
     con = ibis.hotdata.connect(
@@ -275,13 +321,17 @@ def test_create_table_from_pandas_uploads_parquet_dataset(httpserver: HTTPServer
         verify_ssl=False,
     )
 
-    table = con.create_table("demo", pd.DataFrame({"x": [1, 2]}))
+    table = con.create_table(
+        "demo",
+        pd.DataFrame({"x": [1, 2]}),
+        database=(MANAGED_CONN, PUBLIC),
+    )
 
     assert uploaded["table"].to_pydict() == {"x": [1, 2]}
     assert table.schema().names == ("x",)
 
 
-def test_create_table_from_pyarrow_uploads_parquet_dataset(httpserver: HTTPServer, srv: str):
+def test_create_table_from_pyarrow_uploads_managed_table(httpserver: HTTPServer, srv: str):
     uploaded: dict[str, pa.Table] = {}
 
     def on_upload(req: Request) -> Response:
@@ -300,31 +350,22 @@ def test_create_table_from_pyarrow_uploads_parquet_dataset(httpserver: HTTPServe
             content_type="application/json",
         )
 
-    httpserver.expect_request("/v1/files", method="POST").respond_with_handler(on_upload)
-    httpserver.expect_request("/v1/datasets", method="POST").respond_with_json(
-        {
-            "id": "ds_1",
-            "label": "arrow_demo",
-            "schema_name": "sch_1",
-            "table_name": "arrow_demo",
-            "status": "ready",
-            "created_at": "2026-01-01T00:00:00Z",
-        },
-        status=201,
-    )
-    httpserver.expect_request("/v1/information_schema").respond_with_json(
-        information_schema_response(
-            "arrow_demo",
-            "sch_1",
-            [
-                {"name": "x", "data_type": "BIGINT", "nullable": True},
-                {"name": "y", "data_type": "VARCHAR", "nullable": True},
-            ],
-        )
+    mock_managed_create_table_flow(
+        httpserver,
+        table_name="arrow_demo",
+        columns=[
+            {"name": "x", "data_type": "BIGINT", "nullable": True},
+            {"name": "y", "data_type": "VARCHAR", "nullable": True},
+        ],
+        on_upload=on_upload,
     )
 
     con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
-    expr = con.create_table("arrow_demo", pa.table({"x": [1], "y": ["a"]}))
+    expr = con.create_table(
+        "arrow_demo",
+        pa.table({"x": [1], "y": ["a"]}),
+        database=(MANAGED_NAME, PUBLIC),
+    )
 
     assert uploaded["table"].to_pydict() == {"x": [1], "y": ["a"]}
     assert expr.schema().names == ("x", "y")
@@ -349,30 +390,24 @@ def test_create_table_schema_only_uploads_empty_parquet(httpserver: HTTPServer, 
             content_type="application/json",
         )
 
-    httpserver.expect_request("/v1/files", method="POST").respond_with_handler(on_upload)
-    httpserver.expect_request("/v1/datasets", method="POST").respond_with_json(
-        {
-            "id": "ds_1",
-            "label": "empty_demo",
-            "schema_name": "sch_1",
-            "table_name": "empty_demo",
-            "status": "ready",
-            "created_at": "2026-01-01T00:00:00Z",
-        },
-        status=201,
-    )
-    httpserver.expect_request("/v1/information_schema").respond_with_json(
-        information_schema_response(
-            "empty_demo",
-            "sch_1",
-            [
-                {"name": "x", "data_type": "BIGINT", "nullable": True},
-                {"name": "y", "data_type": "VARCHAR", "nullable": True},
-            ],
-        )
+    mock_managed_create_table_flow(
+        httpserver,
+        table_name="empty_demo",
+        columns=[
+            {"name": "x", "data_type": "BIGINT", "nullable": True},
+            {"name": "y", "data_type": "VARCHAR", "nullable": True},
+        ],
+        on_upload=on_upload,
     )
 
-    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+    con = ibis.hotdata.connect(
+        api_url=srv,
+        token="tok",
+        workspace_id="ws",
+        verify_ssl=False,
+        default_connection=MANAGED_CONN,
+        default_schema=PUBLIC,
+    )
     expr = con.create_table("empty_demo", schema=ibis.schema({"x": "int64", "y": "string"}))
 
     assert uploaded["table"].num_rows == 0
@@ -385,10 +420,8 @@ def test_create_table_rejects_unsupported_options(httpserver: HTTPServer, srv: s
 
     with pytest.raises(NotImplementedError, match="temporary"):
         con.create_table("tmp", pd.DataFrame({"x": [1]}), temp=True)
-    with pytest.raises(NotImplementedError, match="overwrite"):
-        con.create_table("tmp", pd.DataFrame({"x": [1]}), overwrite=True)
-    with pytest.raises(NotImplementedError, match="schema"):
-        con.create_table("tmp", pd.DataFrame({"x": [1]}), database="main")
+    with pytest.raises(com.IbisInputError, match="Requires database"):
+        con.create_table("tmp", pd.DataFrame({"x": [1]}))
     with pytest.raises(com.IbisInputError, match="only one of obj or schema"):
         con.create_table(
             "tmp",
@@ -399,51 +432,143 @@ def test_create_table_rejects_unsupported_options(httpserver: HTTPServer, srv: s
         con.create_table("tmp", obj=[{"x": 1}])
 
 
-def test_drop_table_deletes_matching_dataset(httpserver: HTTPServer, srv: str):
-    httpserver.expect_request("/v1/datasets").respond_with_json(
-        dataset_list_response(dataset_summary("ds_1", "demo"))
+def test_create_table_overwrite_loads_with_replace(httpserver: HTTPServer, srv: str):
+    mock_managed_create_table_flow(
+        httpserver,
+        table_name="demo",
+        columns=[{"name": "x", "data_type": "BIGINT", "nullable": True}],
+        table_exists=True,
     )
-    httpserver.expect_request("/v1/datasets/ds_1", method="DELETE").respond_with_data(
+
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+    con.create_table(
+        "demo",
+        pd.DataFrame({"x": [1]}),
+        database=(MANAGED_CONN, PUBLIC),
+        overwrite=True,
+    )
+
+
+def test_create_table_without_overwrite_rejects_existing_table(httpserver: HTTPServer, srv: str):
+    mock_managed_create_table_flow(
+        httpserver,
+        table_name="demo",
+        columns=[{"name": "x", "data_type": "BIGINT", "nullable": True}],
+        table_exists=True,
+    )
+
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+
+    with pytest.raises(com.IbisInputError, match="already exists"):
+        con.create_table(
+            "demo",
+            pd.DataFrame({"x": [1]}),
+            database=(MANAGED_CONN, PUBLIC),
+        )
+
+
+def test_create_database_posts_managed_connection(httpserver: HTTPServer, srv: str):
+    def on_create(req: Request) -> Response:
+        body = req.get_json()
+        assert body == {
+            "name": "sales",
+            "source_type": "managed",
+            "config": {
+                "schemas": [{"name": "public", "tables": [{"name": "orders"}]}],
+            },
+            "skip_discovery": True,
+        }
+        return Response(
+            json.dumps(
+                {
+                    "id": MANAGED_CONN,
+                    "name": "sales",
+                    "source_type": "managed",
+                    "discovery_status": "skipped",
+                    "tables_discovered": 0,
+                }
+            ),
+            status=201,
+            content_type="application/json",
+        )
+
+    httpserver.expect_request("/v1/connections", method="GET").respond_with_json({"connections": []})
+    httpserver.expect_request("/v1/connections", method="POST").respond_with_handler(on_create)
+
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+    con.create_database("sales", schema="public", tables=["orders"])
+
+
+def test_drop_table_deletes_managed_table(httpserver: HTTPServer, srv: str):
+    httpserver.expect_request("/v1/connections").respond_with_json(managed_connections_response())
+    httpserver.expect_request(
+        f"/v1/connections/{MANAGED_CONN}/schemas/{PUBLIC}/tables/demo",
+        method="DELETE",
+    ).respond_with_data(b"", status=204)
+
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+    con.drop_table("demo", database=(MANAGED_CONN, PUBLIC))
+
+
+def test_drop_table_force_ignores_missing_table(httpserver: HTTPServer, srv: str):
+    httpserver.expect_request("/v1/connections").respond_with_json(managed_connections_response())
+    httpserver.expect_request(
+        f"/v1/connections/{MANAGED_CONN}/schemas/{PUBLIC}/tables/missing",
+        method="DELETE",
+    ).respond_with_data(b"not found", status=404)
+
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+    con.drop_table("missing", database=(MANAGED_CONN, PUBLIC), force=True)
+
+
+def test_drop_table_raises_for_non_managed_connection(httpserver: HTTPServer, srv: str):
+    httpserver.expect_request("/v1/connections").respond_with_json(
+        {"connections": [{"id": TPCH_CONN, "name": "TPC-H", "source_type": "duckdb"}]}
+    )
+
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+
+    with pytest.raises(com.IbisInputError, match="not a managed database"):
+        con.drop_table("demo", database=(TPCH_CONN, PUBLIC))
+
+
+def test_drop_table_force_still_raises_for_non_managed_connection(httpserver: HTTPServer, srv: str):
+    httpserver.expect_request("/v1/connections").respond_with_json(
+        {"connections": [{"id": TPCH_CONN, "name": "TPC-H", "source_type": "duckdb"}]}
+    )
+
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+
+    with pytest.raises(com.IbisInputError, match="not a managed database"):
+        con.drop_table("demo", database=(TPCH_CONN, PUBLIC), force=True)
+
+
+def test_drop_database_deletes_managed_connection(httpserver: HTTPServer, srv: str):
+    httpserver.expect_request("/v1/connections").respond_with_json(managed_connections_response())
+    httpserver.expect_request(f"/v1/connections/{MANAGED_CONN}", method="DELETE").respond_with_data(
         b"", status=204
     )
 
-    con = ibis.hotdata.connect(
-        api_url=srv,
-        token="tok",
-        workspace_id="ws",
-        verify_ssl=False,
-    )
-
-    con.drop_table("demo", database=("datasets", "sch_1"))
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+    con.drop_database(MANAGED_NAME)
 
 
-def test_drop_table_force_ignores_missing_dataset(httpserver: HTTPServer, srv: str):
-    httpserver.expect_request("/v1/datasets").respond_with_json(dataset_list_response())
+def test_drop_database_force_ignores_unknown_connection(httpserver: HTTPServer, srv: str):
+    httpserver.expect_request("/v1/connections").respond_with_json({"connections": []})
 
     con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+    con.drop_database("missing", force=True)
 
-    con.drop_table("missing", force=True)
 
-
-def test_drop_table_raises_for_ambiguous_dataset_name(httpserver: HTTPServer, srv: str):
-    httpserver.expect_request("/v1/datasets").respond_with_json(
-        dataset_list_response(
-            dataset_summary("ds_1", "demo", schema_name="a"),
-            dataset_summary("ds_2", "demo", schema_name="b"),
-        )
+def test_drop_database_force_raises_for_non_managed_connection(httpserver: HTTPServer, srv: str):
+    httpserver.expect_request("/v1/connections").respond_with_json(
+        {"connections": [{"id": TPCH_CONN, "name": "TPC-H", "source_type": "duckdb"}]}
     )
 
     con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
 
-    with pytest.raises(com.IbisInputError, match="Multiple Hotdata datasets"):
-        con.drop_table("demo")
-
-
-def test_drop_table_raises_for_non_dataset_catalog(httpserver: HTTPServer, srv: str):
-    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
-
-    with pytest.raises(com.TableNotFound):
-        con.drop_table("demo", database=("tpch", "sch_1"))
+    with pytest.raises(com.IbisInputError, match="not a managed database"):
+        con.drop_database("TPC-H", force=True)
 
 
 def test_compile_scalar_no_roundtrip(httpserver: HTTPServer, srv: str):
