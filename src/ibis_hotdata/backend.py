@@ -613,9 +613,6 @@ class Backend(
         if temp:
             raise NotImplementedError("Hotdata does not support temporary tables.")
 
-        if obj is not None and schema is not None:
-            raise com.IbisInputError("create_table accepts only one of obj or schema")
-
         data = self._local_table_to_parquet(obj, schema)
         connection_id, schema_name = self._table_location(database)
         if not overwrite and self._managed_table_synced(connection_id, schema_name, name):
