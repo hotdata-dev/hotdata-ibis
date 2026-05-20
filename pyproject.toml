@@ -3,7 +3,7 @@ requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ibis-hotdata"
+name = "hotdata-ibis"
 version = "0.1.0"
 description = "Ibis backend for Hotdata federated SQL API (depends on the hotdata SDK only; not hotdata-runtime)"
 readme = "README.md"

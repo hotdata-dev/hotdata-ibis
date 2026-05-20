@@ -7,8 +7,8 @@ Experimental [Ibis](https://ibis-project.org/) backend for [Hotdata](https://www
 ## Install
 
 ```bash
-uv pip install ibis-hotdata
-# or: python -m pip install ibis-hotdata
+uv pip install hotdata-ibis
+# or: python -m pip install hotdata-ibis
 ```
 
 ## Features

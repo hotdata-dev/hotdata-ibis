@@ -663,7 +663,7 @@ class Backend(
     @cached_property
     def version(self) -> str:
         try:
-            v = pkg_version("ibis-hotdata")
+            v = pkg_version("hotdata-ibis")
         except PackageNotFoundError:
             v = "0.0.0"
-        return f"ibis-hotdata {v} (Hotdata /v1/query)"
+        return f"hotdata-ibis {v} (Hotdata /v1/query)"

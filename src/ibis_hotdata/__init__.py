@@ -1,7 +1,7 @@
 from importlib.metadata import PackageNotFoundError, version
 
 try:
-    __version__ = version("ibis-hotdata")
+    __version__ = version("hotdata-ibis")
 except PackageNotFoundError:
     __version__ = "0.0.0+unknown"
 
