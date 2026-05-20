@@ -124,6 +124,7 @@ def test_result_arrow_poll_handles_accepted_result(httpserver: HTTPServer):
     )
     out = client.execute_query("select 1", poll_interval_s=0, poll_timeout_s=5)
     assert out["pa_table"].to_pydict() == {"n": [42]}
+    client.close()
 
 
 def test_async_query_run_failure(httpserver: HTTPServer):
