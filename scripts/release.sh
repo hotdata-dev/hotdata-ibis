@@ -106,6 +106,12 @@ cmd_prepare() {
   ensure_clean
 
   local current new base branch pkg
+  base="$(default_branch)"
+  git fetch origin "$base"
+  git checkout "$base"
+  git pull --ff-only origin "$base"
+  ensure_clean
+
   current="$(get_version)"
   if [[ "$bump" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     new="$bump"
@@ -113,12 +119,6 @@ cmd_prepare() {
     new="$(bump_version "$bump" "$current")"
   fi
   [[ "$new" != "$current" ]] || die "new version ($new) equals current ($current)"
-
-  base="$(default_branch)"
-  git fetch origin "$base"
-  git checkout "$base"
-  git pull --ff-only origin "$base"
-  ensure_clean
 
   set_version "$new"
   update_changelog "$new"
