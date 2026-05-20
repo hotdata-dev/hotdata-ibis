@@ -9,8 +9,6 @@ DEFAULT_SCHEMA = "public"
 
 
 def build_managed_config(schema: str, tables: list[str]) -> dict[str, Any]:
-    if not tables:
-        return {}
     return {
         "schemas": [
             {
