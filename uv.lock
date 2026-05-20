@@ -98,6 +98,46 @@ wheels = [
 ]
 
 [[package]]
+name = "hotdata-ibis"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "hotdata" },
+    { name = "ibis-framework" },
+    { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "pandas", version = "3.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "pyarrow" },
+    { name = "pyarrow-hotfix" },
+    { name = "sqlglot" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "httpx" },
+    { name = "pytest" },
+    { name = "pytest-httpserver" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "hotdata", specifier = ">=0.2.0" },
+    { name = "ibis-framework", specifier = ">=10.0,<11" },
+    { name = "pandas", specifier = ">=2" },
+    { name = "pyarrow", specifier = ">=15" },
+    { name = "pyarrow-hotfix", specifier = ">=0.6" },
+    { name = "sqlglot", specifier = ">=24" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pytest", specifier = ">=8" },
+    { name = "pytest-httpserver", specifier = ">=1" },
+    { name = "ruff", specifier = ">=0.5" },
+]
+
+[[package]]
 name = "httpcore"
 version = "1.0.9"
 source = { registry = "https://pypi.org/simple" }
@@ -141,46 +181,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/95/02/868f297791d26937956466d68a5135411e69a6e6f0bd4e1569a99c70cc76/ibis_framework-10.8.0.tar.gz", hash = "sha256:3cf330c1f786b9d5c425f96df79cc09af7f55c63fd923bd749547c4b1bd03ae4", size = 1238317, upload-time = "2025-07-28T21:28:41.159Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b5/6c/5e45e5946be73214c9a7e9be09476407ddd55aa9edc58056775ec591549c/ibis_framework-10.8.0-py3-none-any.whl", hash = "sha256:17014772b8ba3a69336601af097e3f968e8cbef6e90c0b416e60c459ea1a0aae", size = 1941834, upload-time = "2025-07-28T21:28:38.757Z" },
-]
-
-[[package]]
-name = "ibis-hotdata"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "hotdata" },
-    { name = "ibis-framework" },
-    { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "pandas", version = "3.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "pyarrow" },
-    { name = "pyarrow-hotfix" },
-    { name = "sqlglot" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "httpx" },
-    { name = "pytest" },
-    { name = "pytest-httpserver" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "hotdata", specifier = ">=0.2.0" },
-    { name = "ibis-framework", specifier = ">=10.0,<11" },
-    { name = "pandas", specifier = ">=2" },
-    { name = "pyarrow", specifier = ">=15" },
-    { name = "pyarrow-hotfix", specifier = ">=0.6" },
-    { name = "sqlglot", specifier = ">=24" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "pytest", specifier = ">=8" },
-    { name = "pytest-httpserver", specifier = ">=1" },
-    { name = "ruff", specifier = ">=0.5" },
 ]
 
 [[package]]

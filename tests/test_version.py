@@ -10,4 +10,4 @@ def test_version_is_pep440_core():
 
 
 def test_version_matches_distribution_metadata():
-    assert dist_version("ibis-hotdata") == ibis_hotdata.__version__
+    assert dist_version("hotdata-ibis") == ibis_hotdata.__version__

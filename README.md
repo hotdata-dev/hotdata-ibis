@@ -1,4 +1,4 @@
-# ibis-hotdata
+# hotdata-ibis
 
 Experimental [Ibis](https://ibis-project.org/) backend for [Hotdata](https://www.hotdata.dev/docs/api-reference): compile expressions with Ibis, run federated SQL over the Hotdata API. REST calls use the official **[hotdata](https://github.com/hotdata-dev/sdk-python)** Python SDK. Repo examples use **httpx** (listed under the **dev** dependency group).
 
@@ -7,8 +7,8 @@ Experimental [Ibis](https://ibis-project.org/) backend for [Hotdata](https://www
 ## Install
 
 ```bash
-uv pip install ibis-hotdata
-# or: python -m pip install ibis-hotdata
+uv pip install hotdata-ibis
+# or: python -m pip install hotdata-ibis
 ```
 
 ## Features
@@ -58,7 +58,7 @@ con = ibis.connect(
 
 ## Ibis Support Overview
 
-`ibis-hotdata` is a read-oriented SQL backend. It is useful for exploring Hotdata workspaces with Ibis expressions, running federated SQL, and materializing results locally, but it is not a full mutable database backend.
+`hotdata-ibis` is a read-oriented SQL backend. It is useful for exploring Hotdata workspaces with Ibis expressions, running federated SQL, and materializing results locally, but it is not a full mutable database backend.
 
 Supported today:
 
