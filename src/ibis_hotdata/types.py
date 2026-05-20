@@ -12,5 +12,5 @@ def dtype_from_hotdata_sql_type(sql_type: str | None, *, nullable: bool) -> dt.D
         return dt.String(nullable=nullable)
     try:
         return PostgresType.from_string(sql_type.strip(), nullable=nullable)
-    except Exception:
+    except Exception:  # ibis/sqlglot raise a variety of parse errors; fall back to String
         return dt.String(nullable=nullable)

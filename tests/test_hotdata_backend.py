@@ -499,6 +499,38 @@ def test_create_database_posts_managed_connection(httpserver: HTTPServer, srv: s
     con.create_database("sales", schema="public", tables=["orders"])
 
 
+def test_create_database_no_tables_still_sends_schema(httpserver: HTTPServer, srv: str):
+    def on_create(req: Request) -> Response:
+        body = req.get_json()
+        assert body == {
+            "name": "empty_db",
+            "source_type": "managed",
+            "config": {
+                "schemas": [{"name": "analytics", "tables": []}],
+            },
+            "skip_discovery": True,
+        }
+        return Response(
+            json.dumps(
+                {
+                    "id": MANAGED_CONN,
+                    "name": "empty_db",
+                    "source_type": "managed",
+                    "discovery_status": "skipped",
+                    "tables_discovered": 0,
+                }
+            ),
+            status=201,
+            content_type="application/json",
+        )
+
+    httpserver.expect_request("/v1/connections", method="GET").respond_with_json({"connections": []})
+    httpserver.expect_request("/v1/connections", method="POST").respond_with_handler(on_create)
+
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+    con.create_database("empty_db", schema="analytics")
+
+
 def test_drop_table_deletes_managed_table(httpserver: HTTPServer, srv: str):
     httpserver.expect_request("/v1/connections").respond_with_json(managed_connections_response())
     httpserver.expect_request(

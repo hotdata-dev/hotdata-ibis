@@ -345,6 +345,13 @@ class Backend(
         schema_name: str,
         table_name: str,
     ) -> bool:
+        """Return True only if the table exists and its last load has completed.
+
+        A table whose ``synced`` flag is False is still being loaded; we treat
+        it as writable (returns False) so that an in-progress load can be
+        retried without requiring ``overwrite=True``. Tables not present in the
+        information schema also return False (not yet created).
+        """
         for row in self._iterate_information_schema(
             {"connection_id": connection_id, "schema": schema_name, "table": table_name},
             include_columns=False,
@@ -612,9 +619,6 @@ class Backend(
         """
         if temp:
             raise NotImplementedError("Hotdata does not support temporary tables.")
-
-        if obj is not None and schema is not None:
-            raise com.IbisInputError("create_table accepts only one of obj or schema")
 
         data = self._local_table_to_parquet(obj, schema)
         connection_id, schema_name = self._table_location(database)
