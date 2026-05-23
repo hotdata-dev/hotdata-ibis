@@ -21,17 +21,24 @@ from hotdata.api import (
     ResultsApi,
     UploadsApi,
 )
+from hotdata.api.databases_api import DatabasesApi
 from hotdata.exceptions import ApiException
-from hotdata.models import CreateConnectionRequest, QueryRequest
+from hotdata.models import QueryRequest
 from hotdata.models.async_query_response import AsyncQueryResponse
+from hotdata.models.create_database_request import CreateDatabaseRequest
+from hotdata.models.database_default_schema_decl import DatabaseDefaultSchemaDecl
+from hotdata.models.database_default_table_decl import DatabaseDefaultTableDecl
 from hotdata.models.load_managed_table_request import LoadManagedTableRequest
 
-from ibis_hotdata.managed import DEFAULT_SCHEMA, MANAGED_SOURCE_TYPE, build_managed_config
+from ibis_hotdata.managed import DEFAULT_SCHEMA
 
 T = TypeVar("T")
 
 # Matches Hotdata / runtimedb ``GET /v1/results/{{id}}`` Arrow responses.
 APPLICATION_ARROW_STREAM = "application/vnd.apache.arrow.stream"
+
+# Statuses that mean the query run is still in progress.
+_IN_FLIGHT = {"running", "queued", "pending"}
 
 
 def _sleep_until(deadline: float, interval: float) -> None:
@@ -94,6 +101,7 @@ class HotdataClient:
         self._query_runs = QueryRunsApi(self._client)
         self._results = ResultsApi(self._client)
         self._connections = ConnectionsApi(self._client)
+        self._databases = DatabasesApi(self._client)
         self._information_schema = InformationSchemaApi(self._client)
         self._uploads = UploadsApi(self._client)
 
@@ -135,12 +143,16 @@ class HotdataClient:
         self,
         sql: str,
         *,
+        database_id: str | None = None,
         async_after_ms: int | None = None,
         poll_interval_s: float = 0.25,
         poll_timeout_s: float = 600.0,
     ) -> dict[str, Any]:
         req = QueryRequest(sql=sql, var_async=True, async_after_ms=async_after_ms)
-        out = self._safe_call(self._query.query, req)
+        kwargs: dict[str, Any] = {}
+        if database_id is not None:
+            kwargs["x_database_id"] = database_id
+        out = self._safe_call(self._query.query, req, **kwargs)
         if isinstance(out, AsyncQueryResponse):
             query_run_id = out.query_run_id
             deadline = time.monotonic() + poll_timeout_s
@@ -158,6 +170,8 @@ class HotdataClient:
                         deadline=deadline,
                         poll_interval_s=poll_interval_s,
                     )
+                if status not in _IN_FLIGHT:
+                    raise HotdataAPIError(f"Unexpected query run status: {status!r}")
                 _sleep_until(deadline, poll_interval_s)
             raise HotdataAPIError("Timeout waiting for asynchronous query")
         raise HotdataAPIError("Unexpected query response type")
@@ -169,24 +183,39 @@ class HotdataClient:
         resp = self._safe_call(self._uploads.upload_file, data, **kwargs)
         return resp.model_dump(by_alias=True, mode="json")
 
+    def list_databases(self) -> dict[str, Any]:
+        """GET ``/v1/databases``."""
+        out = self._safe_call(self._databases.list_databases)
+        return out.model_dump(by_alias=True, mode="json")
+
+    def get_database(self, database_id: str) -> dict[str, Any]:
+        """GET ``/v1/databases/{database_id}``."""
+        out = self._safe_call(self._databases.get_database, database_id)
+        return out.model_dump(by_alias=True, mode="json")
+
     def create_managed_database(
         self,
-        name: str,
+        description: str | None = None,
         *,
         schema: str = DEFAULT_SCHEMA,
         tables: Sequence[str] = (),
     ) -> dict[str, Any]:
-        req = CreateConnectionRequest(
-            name=name,
-            source_type=MANAGED_SOURCE_TYPE,
-            config=build_managed_config(schema, list(tables)),
-            skip_discovery=True,
-        )
-        resp = self._safe_call(self._connections.create_connection, req)
+        """POST ``/v1/databases`` — creates a managed database with an auto-provisioned default catalog."""
+        schemas = None
+        if tables:
+            schemas = [
+                DatabaseDefaultSchemaDecl(
+                    name=schema,
+                    tables=[DatabaseDefaultTableDecl(name=t) for t in tables],
+                )
+            ]
+        req = CreateDatabaseRequest(description=description, schemas=schemas)
+        resp = self._safe_call(self._databases.create_database, req)
         return resp.model_dump(by_alias=True, mode="json")
 
-    def delete_connection(self, connection_id: str) -> None:
-        self._safe_call(self._connections.delete_connection, connection_id)
+    def delete_database(self, database_id: str) -> None:
+        """DELETE ``/v1/databases/{database_id}``."""
+        self._safe_call(self._databases.delete_database, database_id)
 
     def load_managed_table(
         self,

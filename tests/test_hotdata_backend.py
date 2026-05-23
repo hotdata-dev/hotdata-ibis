@@ -18,8 +18,9 @@ pytest.importorskip("pytest_httpserver")
 from pytest_httpserver import HTTPServer
 
 # Managed database identifiers for mocked Hotdata (SQL shape ``sales.public.orders``).
-MANAGED_CONN = "conn_sales"
-MANAGED_NAME = "sales"
+MANAGED_DB_ID = "db_sales"      # databases API id
+MANAGED_CONN = "conn_sales"     # default_connection_id (backing connection for loads)
+MANAGED_NAME = "sales"          # description
 PUBLIC = "public"
 TPCH_CONN = "tpch"
 TPCH_SF1 = "tpch_sf1"
@@ -42,15 +43,24 @@ def arrow_stream(table: pa.Table) -> bytes:
     return sink.getvalue()
 
 
-def managed_connections_response() -> dict:
+def managed_databases_response() -> dict:
     return {
-        "connections": [
+        "databases": [
             {
-                "id": MANAGED_CONN,
-                "name": MANAGED_NAME,
-                "source_type": "managed",
+                "id": MANAGED_DB_ID,
+                "description": MANAGED_NAME,
             }
         ]
+    }
+
+
+def managed_database_detail_response() -> dict:
+    return {
+        "id": MANAGED_DB_ID,
+        "description": MANAGED_NAME,
+        "default_connection_id": MANAGED_CONN,
+        "expires_at": None,
+        "attachments": [],
     }
 
 
@@ -88,7 +98,9 @@ def mock_managed_create_table_flow(
     on_upload: Callable[[Request], Response] | None = None,
     table_exists: bool = False,
 ) -> None:
-    httpserver.expect_request("/v1/connections").respond_with_json(managed_connections_response())
+    httpserver.expect_request(f"/v1/databases/{MANAGED_DB_ID}").respond_with_json(
+        managed_database_detail_response()
+    )
 
     def default_upload(req: Request) -> Response:
         assert req.headers["Content-Type"] == "application/parquet"
@@ -324,7 +336,7 @@ def test_create_table_from_pandas_uploads_managed_table(httpserver: HTTPServer, 
     table = con.create_table(
         "demo",
         pd.DataFrame({"x": [1, 2]}),
-        database=(MANAGED_CONN, PUBLIC),
+        database=(MANAGED_DB_ID, PUBLIC),
     )
 
     assert uploaded["table"].to_pydict() == {"x": [1, 2]}
@@ -364,7 +376,7 @@ def test_create_table_from_pyarrow_uploads_managed_table(httpserver: HTTPServer,
     expr = con.create_table(
         "arrow_demo",
         pa.table({"x": [1], "y": ["a"]}),
-        database=(MANAGED_NAME, PUBLIC),
+        database=(MANAGED_DB_ID, PUBLIC),
     )
 
     assert uploaded["table"].to_pydict() == {"x": [1], "y": ["a"]}
@@ -405,7 +417,7 @@ def test_create_table_schema_only_uploads_empty_parquet(httpserver: HTTPServer, 
         token="tok",
         workspace_id="ws",
         verify_ssl=False,
-        default_connection=MANAGED_CONN,
+        default_connection=MANAGED_DB_ID,
         default_schema=PUBLIC,
     )
     expr = con.create_table("empty_demo", schema=ibis.schema({"x": "int64", "y": "string"}))
@@ -444,7 +456,7 @@ def test_create_table_overwrite_loads_with_replace(httpserver: HTTPServer, srv: 
     con.create_table(
         "demo",
         pd.DataFrame({"x": [1]}),
-        database=(MANAGED_CONN, PUBLIC),
+        database=(MANAGED_DB_ID, PUBLIC),
         overwrite=True,
     )
 
@@ -463,7 +475,7 @@ def test_create_table_without_overwrite_rejects_existing_table(httpserver: HTTPS
         con.create_table(
             "demo",
             pd.DataFrame({"x": [1]}),
-            database=(MANAGED_CONN, PUBLIC),
+            database=(MANAGED_DB_ID, PUBLIC),
         )
 
 
@@ -471,113 +483,123 @@ def test_create_database_posts_managed_connection(httpserver: HTTPServer, srv: s
     def on_create(req: Request) -> Response:
         body = req.get_json()
         assert body == {
-            "name": "sales",
-            "source_type": "managed",
-            "config": {
-                "schemas": [{"name": "public", "tables": [{"name": "orders"}]}],
-            },
-            "skip_discovery": True,
+            "description": "sales",
+            "schemas": [{"name": "public", "tables": [{"name": "orders"}]}],
         }
         return Response(
             json.dumps(
                 {
-                    "id": MANAGED_CONN,
-                    "name": "sales",
-                    "source_type": "managed",
-                    "discovery_status": "skipped",
-                    "tables_discovered": 0,
+                    "id": MANAGED_DB_ID,
+                    "description": "sales",
+                    "default_connection_id": MANAGED_CONN,
+                    "expires_at": None,
                 }
             ),
             status=201,
             content_type="application/json",
         )
 
-    httpserver.expect_request("/v1/connections", method="GET").respond_with_json({"connections": []})
-    httpserver.expect_request("/v1/connections", method="POST").respond_with_handler(on_create)
+    # existence check: resolve "sales" by id → 404, then scan list → empty
+    httpserver.expect_request("/v1/databases/sales", method="GET").respond_with_data(
+        json.dumps({"detail": "not found"}), status=404, content_type="application/json"
+    )
+    httpserver.expect_request("/v1/databases", method="GET").respond_with_json({"databases": []})
+    httpserver.expect_request("/v1/databases", method="POST").respond_with_handler(on_create)
 
     con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
     con.create_database("sales", schema="public", tables=["orders"])
 
 
-def test_create_database_no_tables_still_sends_schema(httpserver: HTTPServer, srv: str):
+def test_create_database_sends_no_schemas_when_no_tables(httpserver: HTTPServer, srv: str):
     def on_create(req: Request) -> Response:
         body = req.get_json()
-        assert body == {
-            "name": "empty_db",
-            "source_type": "managed",
-            "config": {
-                "schemas": [{"name": "analytics", "tables": []}],
-            },
-            "skip_discovery": True,
-        }
+        assert body.get("description") == "empty_db"
+        assert not body.get("schemas")  # no tables → no schemas declared
         return Response(
             json.dumps(
                 {
-                    "id": MANAGED_CONN,
-                    "name": "empty_db",
-                    "source_type": "managed",
-                    "discovery_status": "skipped",
-                    "tables_discovered": 0,
+                    "id": MANAGED_DB_ID,
+                    "description": "empty_db",
+                    "default_connection_id": MANAGED_CONN,
+                    "expires_at": None,
                 }
             ),
             status=201,
             content_type="application/json",
         )
 
-    httpserver.expect_request("/v1/connections", method="GET").respond_with_json({"connections": []})
-    httpserver.expect_request("/v1/connections", method="POST").respond_with_handler(on_create)
+    # existence check: resolve "empty_db" by id → 404, then scan list → empty
+    httpserver.expect_request("/v1/databases/empty_db", method="GET").respond_with_data(
+        json.dumps({"detail": "not found"}), status=404, content_type="application/json"
+    )
+    httpserver.expect_request("/v1/databases", method="GET").respond_with_json({"databases": []})
+    httpserver.expect_request("/v1/databases", method="POST").respond_with_handler(on_create)
 
     con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
     con.create_database("empty_db", schema="analytics")
 
 
 def test_drop_table_deletes_managed_table(httpserver: HTTPServer, srv: str):
-    httpserver.expect_request("/v1/connections").respond_with_json(managed_connections_response())
+    httpserver.expect_request(f"/v1/databases/{MANAGED_DB_ID}").respond_with_json(
+        managed_database_detail_response()
+    )
     httpserver.expect_request(
         f"/v1/connections/{MANAGED_CONN}/schemas/{PUBLIC}/tables/demo",
         method="DELETE",
     ).respond_with_data(b"", status=204)
 
     con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
-    con.drop_table("demo", database=(MANAGED_CONN, PUBLIC))
+    con.drop_table("demo", database=(MANAGED_DB_ID, PUBLIC))
 
 
 def test_drop_table_force_ignores_missing_table(httpserver: HTTPServer, srv: str):
-    httpserver.expect_request("/v1/connections").respond_with_json(managed_connections_response())
+    httpserver.expect_request(f"/v1/databases/{MANAGED_DB_ID}").respond_with_json(
+        managed_database_detail_response()
+    )
     httpserver.expect_request(
         f"/v1/connections/{MANAGED_CONN}/schemas/{PUBLIC}/tables/missing",
         method="DELETE",
     ).respond_with_data(b"not found", status=404)
 
     con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
-    con.drop_table("missing", database=(MANAGED_CONN, PUBLIC), force=True)
+    con.drop_table("missing", database=(MANAGED_DB_ID, PUBLIC), force=True)
 
 
-def test_drop_table_raises_for_non_managed_connection(httpserver: HTTPServer, srv: str):
-    httpserver.expect_request("/v1/connections").respond_with_json(
-        {"connections": [{"id": TPCH_CONN, "name": "TPC-H", "source_type": "duckdb"}]}
+def test_drop_table_raises_for_unknown_database(httpserver: HTTPServer, srv: str):
+    httpserver.expect_request(f"/v1/databases/{TPCH_CONN}").respond_with_data(
+        json.dumps({"detail": "not found"}), status=404, content_type="application/json"
     )
+    httpserver.expect_request("/v1/databases", method="GET").respond_with_json({"databases": []})
 
     con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
 
-    with pytest.raises(com.IbisInputError, match="not a managed database"):
+    with pytest.raises(com.IbisError, match="Unknown managed database"):
         con.drop_table("demo", database=(TPCH_CONN, PUBLIC))
 
 
-def test_drop_table_force_still_raises_for_non_managed_connection(httpserver: HTTPServer, srv: str):
-    httpserver.expect_request("/v1/connections").respond_with_json(
-        {"connections": [{"id": TPCH_CONN, "name": "TPC-H", "source_type": "duckdb"}]}
+def test_drop_table_force_ignores_unknown_database(httpserver: HTTPServer, srv: str):
+    # force=True silently swallows the "Unknown managed database" IbisError
+    httpserver.expect_request(f"/v1/databases/{TPCH_CONN}").respond_with_data(
+        json.dumps({"detail": "not found"}), status=404, content_type="application/json"
     )
+    httpserver.expect_request("/v1/databases", method="GET").respond_with_json({"databases": []})
 
     con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
-
-    with pytest.raises(com.IbisInputError, match="not a managed database"):
-        con.drop_table("demo", database=(TPCH_CONN, PUBLIC), force=True)
+    con.drop_table("demo", database=(TPCH_CONN, PUBLIC), force=True)
 
 
-def test_drop_database_deletes_managed_connection(httpserver: HTTPServer, srv: str):
-    httpserver.expect_request("/v1/connections").respond_with_json(managed_connections_response())
-    httpserver.expect_request(f"/v1/connections/{MANAGED_CONN}", method="DELETE").respond_with_data(
+def test_drop_database_deletes_managed_database(httpserver: HTTPServer, srv: str):
+    # resolve "sales" by description: id lookup 404, scan list, then get detail
+    httpserver.expect_request(f"/v1/databases/{MANAGED_NAME}", method="GET").respond_with_data(
+        json.dumps({"detail": "not found"}), status=404, content_type="application/json"
+    )
+    httpserver.expect_request("/v1/databases", method="GET").respond_with_json(
+        managed_databases_response()
+    )
+    httpserver.expect_request(f"/v1/databases/{MANAGED_DB_ID}", method="GET").respond_with_json(
+        managed_database_detail_response()
+    )
+    httpserver.expect_request(f"/v1/databases/{MANAGED_DB_ID}", method="DELETE").respond_with_data(
         b"", status=204
     )
 
@@ -586,21 +608,24 @@ def test_drop_database_deletes_managed_connection(httpserver: HTTPServer, srv: s
 
 
 def test_drop_database_force_ignores_unknown_connection(httpserver: HTTPServer, srv: str):
-    httpserver.expect_request("/v1/connections").respond_with_json({"connections": []})
+    httpserver.expect_request("/v1/databases/missing", method="GET").respond_with_data(
+        json.dumps({"detail": "not found"}), status=404, content_type="application/json"
+    )
+    httpserver.expect_request("/v1/databases", method="GET").respond_with_json({"databases": []})
 
     con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
     con.drop_database("missing", force=True)
 
 
-def test_drop_database_force_raises_for_non_managed_connection(httpserver: HTTPServer, srv: str):
-    httpserver.expect_request("/v1/connections").respond_with_json(
-        {"connections": [{"id": TPCH_CONN, "name": "TPC-H", "source_type": "duckdb"}]}
+def test_drop_database_force_ignores_unrecognized_name(httpserver: HTTPServer, srv: str):
+    # force=True silently ignores names not found in the databases API
+    httpserver.expect_request("/v1/databases/TPC-H", method="GET").respond_with_data(
+        json.dumps({"detail": "not found"}), status=404, content_type="application/json"
     )
+    httpserver.expect_request("/v1/databases", method="GET").respond_with_json({"databases": []})
 
     con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
-
-    with pytest.raises(com.IbisInputError, match="not a managed database"):
-        con.drop_database("TPC-H", force=True)
+    con.drop_database("TPC-H", force=True)
 
 
 def test_compile_scalar_no_roundtrip(httpserver: HTTPServer, srv: str):
