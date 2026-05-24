@@ -52,6 +52,8 @@ con = ibis.connect(
 
 **Mapping:** Ibis **catalog** = Hotdata connection id; **database** = remote schema; **table** = table name. SQL references look like `connection.schema.table`. With a single connection and schema, defaults are inferred; otherwise set `default_connection` / `default_schema` or qualify `con.table(..., database=(conn_id, schema))`.
 
+> **Managed databases:** SQL and Ibis expressions against managed database tables use `"default"` as the catalog rather than the connection id. The backend resolves this automatically — see [Managed databases](#managed-databases) below.
+
 **Execution:** SQL is compiled with Ibis’s **Postgres** SQLGlot compiler. The client submits queries asynchronously with `POST /v1/query`, polls `GET /v1/query-runs/{id}`, then downloads ready results as Arrow IPC from `GET /v1/results/{id}`. Tuning: `poll_interval_s`, `poll_timeout_s` on `connect()`.
 
 **Types:** Typed tables come from Hotdata’s information schema. `con.sql(...)` types are inferred from a small preview query and Arrow schema; see [Hotdata SQL](https://www.hotdata.dev/docs/sql) for server behavior.
@@ -68,8 +70,8 @@ Supported today:
 - **SQL-backed expressions:** Ibis expressions compile with the Postgres SQLGlot compiler and execute through Hotdata. Common `SELECT` workloads such as projection, filtering, joins, grouping, aggregation, ordering, limits, scalar expressions, and `con.sql(...)` work when the generated SQL is accepted by Hotdata.
 - **Result materialization:** `.execute()` returns pandas objects. `.to_pyarrow()` and `.to_pyarrow_batches()` use the Arrow IPC result data exposed by Hotdata without converting through JSON rows; batches are split locally after the result is downloaded.
 - **Raw SQL escape hatch:** `con.sql("SELECT ...", dialect="postgres")` is the most reliable way to use Hotdata-specific federated table names or SQL that Ibis does not model directly.
-- **Managed database lifecycle:** `create_database("sales", schema="public", tables=["orders"])` registers a managed connection (Ibis catalog). `create_table("orders", pandas_df, database=("sales", "public"))` uploads Parquet and loads it with replace mode. Query as `sales.public.orders` in SQL. `drop_table` clears a managed table; `drop_database` deletes the connection.
-- **Parquet uploads:** `create_table` accepts pandas DataFrames, PyArrow tables, or schema-only empty tables. Tables must live in a managed connection — declare them with `create_database(..., tables=[...])` first. Loads always use replace mode; pass `overwrite=True` to replace an existing synced table (the default `overwrite=False` raises if the table already exists).
+- **Managed database lifecycle:** `create_database("sales", schema="public", tables=["orders"])` provisions a managed connection (Ibis catalog). `create_table("orders", pandas_df, database=("sales", "public"))` uploads Parquet and loads it. Query using `database=("default", "public")` or the `"default"."public"."orders"` SQL prefix. `drop_table` clears a managed table; `drop_database` deletes the connection. See [Managed databases](#managed-databases) for a complete example.
+- **Parquet uploads:** `create_table` accepts pandas DataFrames, PyArrow tables, or schema-only empty tables. Tables must live in a managed connection — declare them with `create_database(..., tables=[...])` first. Loads are asynchronous; poll `_managed_table_synced(conn_id, schema, table)` if you need to query immediately. Loads always use replace mode; pass `overwrite=True` to replace an existing synced table (the default `overwrite=False` raises if the table already exists).
 
 Not supported as full Ibis backend features:
 
@@ -80,6 +82,58 @@ Not supported as full Ibis backend features:
 - **Backend-native SQL dialect:** Compilation uses Ibis' Postgres dialect as the closest fit. Hotdata SQL and federation rules are authoritative, so not every Ibis expression that compiles is guaranteed to execute remotely.
 - **Complete Ibis compliance:** The backend is experimental and has focused test coverage for connection, discovery, schema mapping, execution, uploads, and Arrow results. It has not yet been validated against the full Ibis backend test suite.
 - **Hotdata platform APIs beyond SQL and managed databases:** embeddings, indexes, query history management, sandbox lifecycle management, and other Hotdata-specific APIs are outside the Ibis backend surface.
+
+## Managed databases
+
+Managed databases are temporary, workspace-owned connections for uploading and querying your own data. Tables must be declared at creation time, loads are asynchronous, and SQL uses `"default"` as the catalog (not the raw connection id).
+
+```python
+import time
+import ibis
+import pandas as pd
+
+con = ibis.hotdata.connect(
+    api_url="https://api.hotdata.dev",
+    token="YOUR_API_TOKEN",
+    workspace_id="ws_…",
+)
+
+# 1. Create the managed database and declare tables upfront.
+#    Tables must be declared here — load_managed_table rejects undeclared names.
+con.create_database("my-dataset", schema="public", tables=["orders"])
+
+# 2. Resolve the database id + underlying connection id.
+db = con._resolve_managed_connection("my-dataset")
+db_id   = db["id"]                      # "dbid…"
+conn_id = db["default_connection_id"]   # "conn…"
+
+# 3. Upload data (pandas DataFrame or PyArrow table).
+df = pd.DataFrame({"order_id": [1, 2, 3], "amount": [9.99, 49.99, 5.00]})
+con.create_table("orders", df, database=(db_id, "public"), overwrite=True)
+
+# 4. Loads are async — wait for the table to sync before querying.
+while not con._managed_table_synced(conn_id, "public", "orders"):
+    time.sleep(1)
+
+# 5. Query with Ibis expressions.
+#    Use database=("default", schema) — managed databases require "default" as the
+#    SQL catalog; the backend resolves the underlying connection automatically.
+t = con.table("orders", database=("default", "public"))
+result = t.filter(t.amount > 10).order_by("amount").execute()
+
+# 6. Or with raw SQL (same "default" catalog prefix).
+result = con.sql('SELECT sum(amount) AS total FROM "default"."public"."orders"').execute()
+
+# 7. Clean up.
+con.drop_database("my-dataset")
+```
+
+**Key points:**
+- `create_database(..., tables=[...])` — table names must be listed here before uploading.
+- `create_table(..., database=(db_id, schema))` — pass the managed database id (from `_resolve_managed_connection`) as the first element of the tuple, not the connection id.
+- SQL catalog is `"default"`, not the connection id — `"default"."schema"."table"` is the correct form.
+- After `create_table`, ibis table references automatically use `database=("default", schema)`; use the same form for subsequent `con.table(...)` calls.
+- Loads are asynchronous. Poll `_managed_table_synced(conn_id, schema, table)` or add a small sleep before querying.
 
 ## Development
 

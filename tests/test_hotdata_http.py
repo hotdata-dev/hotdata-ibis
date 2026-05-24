@@ -222,28 +222,23 @@ def test_create_managed_database(httpserver: HTTPServer):
     def on_create(req: Request) -> Response:
         body = req.get_json()
         assert body == {
-            "name": "sales",
-            "source_type": "managed",
-            "config": {
-                "schemas": [{"name": "public", "tables": [{"name": "orders"}]}],
-            },
-            "skip_discovery": True,
+            "description": "sales",
+            "schemas": [{"name": "public", "tables": [{"name": "orders"}]}],
         }
         return Response(
             json.dumps(
                 {
-                    "id": "conn_sales",
-                    "name": "sales",
-                    "source_type": "managed",
-                    "discovery_status": "skipped",
-                    "tables_discovered": 0,
+                    "id": "db_sales",
+                    "description": "sales",
+                    "default_connection_id": "conn_sales",
+                    "expires_at": None,
                 }
             ),
             status=201,
             content_type="application/json",
         )
 
-    httpserver.expect_oneshot_request("/v1/connections", method="POST").respond_with_handler(
+    httpserver.expect_oneshot_request("/v1/databases", method="POST").respond_with_handler(
         on_create
     )
 
@@ -254,17 +249,18 @@ def test_create_managed_database(httpserver: HTTPServer):
         verify_ssl=False,
     )
     out = client.create_managed_database("sales", schema="public", tables=["orders"])
-    assert out["id"] == "conn_sales"
+    assert out["id"] == "db_sales"
+    assert out["default_connection_id"] == "conn_sales"
     client.close()
 
 
-def test_delete_managed_table_and_connection(httpserver: HTTPServer):
+def test_delete_managed_table_and_database(httpserver: HTTPServer):
     httpserver.expect_oneshot_request(
         "/v1/connections/conn_sales/schemas/public/tables/demo",
         method="DELETE",
     ).respond_with_data(b"", status=204)
     httpserver.expect_oneshot_request(
-        "/v1/connections/conn_sales",
+        "/v1/databases/db_sales",
         method="DELETE",
     ).respond_with_data(b"", status=204)
 
@@ -275,7 +271,7 @@ def test_delete_managed_table_and_connection(httpserver: HTTPServer):
         verify_ssl=False,
     )
     client.delete_managed_table("conn_sales", "public", "demo")
-    client.delete_connection("conn_sales")
+    client.delete_database("db_sales")
     client.close()
 
 
