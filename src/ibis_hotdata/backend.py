@@ -174,6 +174,11 @@ class Backend(
         default_schema
             Optional default **database** (remote schema name). If omitted and only
             one schema exists for the default connection, it is chosen automatically.
+        database_id
+            Optional managed database id to bind at connect time. When set, all
+            queries use this database's ``X-Database-Id`` header and ``"default"``
+            catalog references resolve to the underlying connection automatically —
+            without needing to call ``create_table`` first.
         poll_interval_s
             Sleep between ``GET /v1/query-runs/{id}`` polls.
         poll_timeout_s
@@ -330,23 +335,36 @@ class Backend(
                 return conn
         raise com.IbisError(f"Unknown Hotdata connection {name_or_id!r}")
 
-    def _resolve_managed_connection(self, name_or_id: str) -> dict[str, Any]:
-        """Resolve a managed database by id or description, returning its detail dict."""
-        # Try direct ID lookup first
+    def _find_managed_connection(self, name_or_id: str) -> dict[str, Any] | None:
+        """Look up a managed database by id or description.
+
+        Returns the detail dict if found, ``None`` if not found.
+        Raises :class:`~ibis.common.exceptions.IbisError` on API failures.
+        """
         try:
             return self._http.get_database(name_or_id)
         except HotdataAPIError as exc:
             if exc.status_code != 404:
                 raise _ibis_err_from_hotdata(exc) from exc
         # Fall back to description scan
-        data = self._http.list_databases()
+        try:
+            data = self._http.list_databases()
+        except HotdataAPIError as exc:
+            raise _ibis_err_from_hotdata(exc) from exc
         for db in data.get("databases", []):
             if db.get("description") == name_or_id:
                 try:
                     return self._http.get_database(db["id"])
                 except HotdataAPIError as exc:
                     raise _ibis_err_from_hotdata(exc) from exc
-        raise com.IbisError(f"Unknown managed database {name_or_id!r}")
+        return None
+
+    def _resolve_managed_connection(self, name_or_id: str) -> dict[str, Any]:
+        """Resolve a managed database by id or description, returning its detail dict."""
+        result = self._find_managed_connection(name_or_id)
+        if result is None:
+            raise com.IbisError(f"Unknown managed database {name_or_id!r}")
+        return result
 
     def _managed_table_synced(
         self,
@@ -391,9 +409,9 @@ class Backend(
                 )
         db_record = self._resolve_managed_connection(conn)
         conn_id = db_record["default_connection_id"]
-        # Keep the cached mapping in sync so get_schema can use the real connection_id
-        # when the SQL catalog is "default" (the prefix managed databases require).
-        self._database_id = self._database_id or db_record["id"]
+        # Always update both cached values so they stay in sync across multiple
+        # create_table / drop_table calls, even if different managed databases are used.
+        self._database_id = db_record["id"]
         self._database_connection_id = conn_id
         return conn_id, schema
 
@@ -428,7 +446,7 @@ class Backend(
         # Managed database tables use "default" as the SQL catalog but the info
         # schema REST API needs the real connection_id.
         api_conn = (
-            self._resolve_database_connection_id() or conn
+            (self._resolve_database_connection_id() or conn)
             if conn == "default"
             else conn
         )
@@ -566,12 +584,10 @@ class Backend(
             raise com.UnsupportedOperationError(
                 "Hotdata create_database creates a managed connection (catalog); catalog= is not supported"
             )
-        # Check if a database with this description already exists
-        existing = None
-        try:
-            existing = self._resolve_managed_connection(name)
-        except com.IbisError:
-            pass
+        # Check if a database with this description already exists.
+        # Use _find_managed_connection so API errors (5xx) propagate while
+        # a plain not-found returns None and is handled below.
+        existing = self._find_managed_connection(name)
         if existing is not None:
             if not force:
                 raise com.IbisInputError(f"Managed database {name!r} already exists")
