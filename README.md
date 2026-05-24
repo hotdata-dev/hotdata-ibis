@@ -2,7 +2,7 @@
 
 Experimental [Ibis](https://ibis-project.org/) backend for [Hotdata](https://www.hotdata.dev/docs/api-reference): compile expressions with Ibis, run federated SQL over the Hotdata API. REST calls use the official **[hotdata](https://github.com/hotdata-dev/sdk-python)** Python SDK. Repo examples use **httpx** (listed under the **dev** dependency group).
 
-**Requirements:** Python 3.10+, **ibis-framework** 10.x, **hotdata** ≥0.2.
+**Requirements:** Python 3.10+, **ibis-framework** 10.x, **hotdata** ≥0.2.3.
 
 ## Install
 
@@ -16,7 +16,7 @@ uv pip install hotdata-ibis
 - **Ibis connection API** — connect with `ibis.hotdata.connect(...)` or `ibis.connect("hotdata://...")`.
 - **Hotdata catalog mapping** — expose Hotdata connections, schemas, and tables through Ibis catalogs, databases, and tables.
 - **SQL-backed expression execution** — compile Ibis expressions with the Postgres SQLGlot compiler and execute them through Hotdata query APIs.
-- **Typed table discovery** — load schema metadata from Hotdata information schema and map SQL types into Ibis types.
+- **Typed table discovery** — load schema metadata from Hotdata information schema and map SQL types into Ibis types. Both SQL-style names (`INTEGER`, `VARCHAR`) and Arrow-style names (`Float64`, `Utf8`) returned by Parquet/managed tables are handled.
 - **Arrow and pandas results** — materialize expressions as pandas DataFrames, PyArrow tables, or local Arrow record batches.
 - **Raw SQL escape hatch** — use `con.sql(..., dialect="postgres")` when Hotdata-specific federated SQL is clearer than modeled Ibis expressions.
 - **Managed database writes** — create managed connections with `create_database`, load local pandas or PyArrow data through `create_table`, and clean up with `drop_table` / `drop_database`.
@@ -56,7 +56,7 @@ con = ibis.connect(
 
 **Execution:** SQL is compiled with Ibis’s **Postgres** SQLGlot compiler. The client submits queries asynchronously with `POST /v1/query`, polls `GET /v1/query-runs/{id}`, then downloads ready results as Arrow IPC from `GET /v1/results/{id}`. Tuning: `poll_interval_s`, `poll_timeout_s` on `connect()`.
 
-**Types:** Typed tables come from Hotdata’s information schema. `con.sql(...)` types are inferred from a small preview query and Arrow schema; see [Hotdata SQL](https://www.hotdata.dev/docs/sql) for server behavior.
+**Types:** Typed tables come from Hotdata’s information schema. `con.sql(...)` types are inferred from a small preview query and Arrow schema. Both SQL-style names (`INTEGER`, `DOUBLE PRECISION`) and Arrow-style names (`Float64`, `Utf8`, `Date32`) returned by Parquet/managed tables are supported; see [Hotdata SQL](https://www.hotdata.dev/docs/sql) for server behavior.
 
 ## Ibis Support Overview
 
