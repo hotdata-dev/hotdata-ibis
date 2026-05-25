@@ -1,38 +1,56 @@
 # hotdata-ibis
 
-Use [Ibis](https://ibis-project.org/) to query and upload data in your [Hotdata](https://www.hotdata.dev/docs/api-reference) workspace — write Python expressions instead of SQL, get pandas or Arrow results back.
+Use [Ibis](https://ibis-project.org/) to create on-demand databases, upload data, and query with Python expressions — get pandas or Arrow results back without writing SQL.
 
 **Requirements:** Python 3.10+, **ibis-framework** 10.x, **hotdata** ≥0.2.3.
 
 ## Install
 
 ```bash
-uv pip install hotdata-ibis
-# or: pip install hotdata-ibis
+pip install hotdata-ibis
+# or: uv pip install hotdata-ibis
 ```
 
-## Quick start
+## Quickstart: create a database and query it
 
 ```python
+import time
+import pandas as pd
 import ibis
 
 con = ibis.hotdata.connect(
     api_url="https://api.hotdata.dev",
-    token="YOUR_API_TOKEN",
-    workspace_id="ws_…",
+    token="YOUR_API_KEY",
+    workspace_id="ws_...",
 )
 
-# List available tables
-con.list_tables()
+# 1. Create a database and declare the tables you'll load
+con.create_database("sales", schema="public", tables=["orders"])
 
-# Query with Ibis expressions
-t = con.table("customer", database=("my_connection", "tpch_sf1"))
-df = (
-    t.filter(t.c_mktsegment == "AUTOMOBILE")
-    .select("c_custkey", "c_name")
-    .limit(100)
-    .execute()      # returns a pandas DataFrame
+# 2. Upload a pandas DataFrame (or PyArrow table)
+df = pd.DataFrame({
+    "order_id": [1, 2, 3],
+    "amount": [9.99, 49.99, 5.00],
+    "region": ["west", "east", "west"],
+})
+con.create_table("orders", df, database=("sales", "public"), overwrite=True)
+
+# 3. Uploads are async — wait briefly before querying
+time.sleep(2)
+
+# 4. Query with Ibis expressions
+#    Managed tables are always accessed with catalog "default"
+t = con.table("orders", database=("default", "public"))
+result = (
+    t.group_by("region")
+    .agg(total=t.amount.sum())
+    .order_by(ibis.desc("total"))
+    .execute()  # returns a pandas DataFrame
 )
+
+# 5. Clean up
+con.drop_table("orders", database=("sales", "public"))
+con.drop_database("sales")
 ```
 
 ## Connect
@@ -40,129 +58,148 @@ df = (
 ```python
 con = ibis.hotdata.connect(
     api_url="https://api.hotdata.dev",
-    token="YOUR_API_TOKEN",
-    workspace_id="ws_…",
-    default_connection="my_connection",  # skip qualifying every table reference
-    default_schema="public",             # skip qualifying every table reference
-    session_id=None,                     # optional sandbox session
-    timeout=120.0,
-    verify_ssl=True,
-    poll_interval_s=0.25,
-    poll_timeout_s=600.0,
+    token="YOUR_API_KEY",
+    workspace_id="ws_...",
 )
 ```
 
-URL style also works — token can go in the query string or the URL password segment:
+URL-style also works:
 
 ```python
-con = ibis.connect("hotdata://api.hotdata.dev/?token=…&workspace_id=ws_…")
+con = ibis.connect("hotdata://api.hotdata.dev/?token=...&workspace_id=ws_...")
 ```
 
-**Table addressing:** Hotdata organizes data as `connection → schema → table`. In Ibis terms that maps to `catalog → database → table`. With a single connection and schema, defaults are inferred automatically. For multiple connections or schemas, pass `database=(connection_id, schema)` when referencing a table, or set `default_connection` / `default_schema` at connect time.
+## Managed databases
+
+Managed databases are the primary way to bring data into Hotdata with Ibis. Declare a database and its tables, upload data, and query immediately.
+
+### Create and load
+
+```python
+# Declare the database and all table names up front
+con.create_database("analytics", schema="public", tables=["events", "users"])
+
+# Upload from a pandas DataFrame
+con.create_table("events", events_df, database=("analytics", "public"), overwrite=True)
+
+# PyArrow tables also work
+import pyarrow as pa
+table = pa.table({"id": [1, 2], "name": ["alice", "bob"]})
+con.create_table("users", table, database=("analytics", "public"), overwrite=True)
+```
+
+Table names must be declared when the database is created — you cannot add new table names later without recreating the database.
+
+### Query
+
+When querying, use `"default"` as the catalog:
+
+```python
+t = con.table("events", database=("default", "public"))
+
+result = (
+    t.filter(t.event_type == "click")
+    .group_by("user_id")
+    .agg(n=t.count())
+    .execute()
+)
+```
+
+Or with raw SQL:
+
+```python
+result = con.sql(
+    'SELECT user_id, COUNT(*) AS n '
+    'FROM "default"."public"."events" '
+    'WHERE event_type = \'click\' '
+    'GROUP BY user_id'
+).execute()
+```
+
+### Delete
+
+```python
+con.drop_table("events", database=("analytics", "public"))
+con.drop_database("analytics")
+```
+
+### Addressing summary
+
+| Operation | `database=` argument |
+|-----------|----------------------|
+| `create_table` / `drop_table` | `("your-database-name", schema)` |
+| `con.table(...)` when querying | `("default", schema)` |
 
 ## Querying
 
 ### Ibis expressions
 
 ```python
-t = con.table("orders")
+t = con.table("orders", database=("default", "public"))
 
-# Filter, select, aggregate — all run as SQL on Hotdata
 summary = (
-    t.filter(t.status == "shipped")
+    t.filter(t.amount > 10)
     .group_by("region")
     .agg(total=t.amount.sum(), n=t.count())
-    .order_by("total", ascending=False)
+    .order_by(ibis.desc("total"))
     .execute()
 )
 ```
 
-`.execute()` returns a **pandas DataFrame**. Use `.to_pyarrow()` for an Arrow table or `.to_pyarrow_batches()` for a record batch reader.
+`.execute()` returns a **pandas DataFrame**. Use `.to_pyarrow()` for an Arrow table or `.to_pyarrow_batches()` to stream batches without materializing the full result.
 
 ### Raw SQL
 
-When you need Hotdata-specific syntax, federated table names, or SQL that Ibis doesn't model:
-
 ```python
-df = con.sql(
-    "SELECT region, SUM(amount) AS total FROM my_conn.public.orders GROUP BY region",
+base = con.sql(
+    'SELECT * FROM "default"."public"."orders"',
     dialect="postgres",
-).execute()
+)
+result = base.filter(base.amount > 10).execute()
 ```
 
-You can chain Ibis expressions on the result of `con.sql(...)` the same way you would on `con.table(...)`.
+You can chain Ibis expressions on the result of `con.sql(...)`.
 
-### Discover what's available
+## Connecting to existing sources
 
-```python
-con.list_catalogs()                             # Hotdata connection ids
-con.list_databases(catalog="my_connection")     # schemas for a connection
-con.list_tables(database=("my_connection", "public"))
-con.get_schema("orders", catalog="my_connection", database="public")
-```
-
-## Managed databases
-
-Managed databases let you upload your own data (pandas DataFrames or PyArrow tables) and query it alongside your other Hotdata connections. They are provisioned on demand and scoped to your workspace.
+If you have existing databases or warehouses connected to your Hotdata workspace (Postgres, Snowflake, BigQuery, etc.), you can query them through the same Ibis connection:
 
 ```python
-import time
-import ibis
-import pandas as pd
-
 con = ibis.hotdata.connect(
     api_url="https://api.hotdata.dev",
-    token="YOUR_API_TOKEN",
-    workspace_id="ws_…",
+    token="YOUR_API_KEY",
+    workspace_id="ws_...",
+    default_connection="my_postgres",
+    default_schema="public",
 )
 
-# 1. Create the database and declare which tables you'll upload.
-#    Table names must be declared here — uploads to undeclared names are rejected.
-con.create_database("my-dataset", schema="public", tables=["orders"])
-
-# 2. Upload data.
-df = pd.DataFrame({"order_id": [1, 2, 3], "amount": [9.99, 49.99, 5.00]})
-con.create_table("orders", df, database=("my-dataset", "public"), overwrite=True)
-
-# 3. Uploads are asynchronous — wait a moment before querying.
-time.sleep(2)
-
-# 4. Query with Ibis expressions.
-#    Managed tables use "default" as the catalog — the backend handles this automatically.
-t = con.table("orders", database=("default", "public"))
-result = t.filter(t.amount > 10).order_by("amount").execute()
-
-# 5. Or with raw SQL.
-result = con.sql('SELECT SUM(amount) AS total FROM "default"."public"."orders"').execute()
-
-# 6. Clean up.
-con.drop_table("orders", database=("my-dataset", "public"))
-con.drop_database("my-dataset")
+t = con.table("orders")  # resolves to my_postgres.public.orders
 ```
 
-**Things to know:**
-- Declare all table names in `create_database(..., tables=[...])` before uploading — you can't add them later without recreating the database.
-- Use `database=("my-dataset", schema)` when uploading (`create_table`) or dropping tables (`drop_table`).
-- Use `database=("default", schema)` when querying — managed tables always use `"default"` as the SQL catalog prefix.
-- `create_table` accepts pandas DataFrames, PyArrow tables, or an Ibis schema for creating an empty table.
-- Uploads use replace mode. Pass `overwrite=True` to replace a table that already exists; without it, uploading to an existing table raises an error.
+Discover what's available:
+
+```python
+con.list_catalogs()                                    # connection IDs
+con.list_databases(catalog="my_postgres")              # schemas
+con.list_tables(database=("my_postgres", "public"))    # tables
+```
 
 ## What's supported
 
 | Feature | Status |
-|---|---|
-| `list_catalogs`, `list_databases`, `list_tables` | ✅ |
+|---------|--------|
+| `create_database` / `drop_database` (managed) | ✅ |
+| `create_table` / `drop_table` (DataFrame or Arrow upload) | ✅ |
 | `con.table(...)` with full schema metadata | ✅ |
 | Ibis expressions: filter, select, join, group\_by, agg, order\_by, limit | ✅ |
 | `con.sql(...)` raw SQL | ✅ |
 | `.execute()` → pandas, `.to_pyarrow()`, `.to_pyarrow_batches()` | ✅ |
-| `create_database` / `drop_database` (managed) | ✅ |
-| `create_table` / `drop_table` (managed, Parquet upload) | ✅ |
+| `list_catalogs`, `list_databases`, `list_tables` | ✅ |
 | Temporary tables | ❌ |
 | Python UDFs | ❌ |
 | INSERT / UPDATE / DELETE on external connections | ❌ |
 
-SQL compilation uses Ibis's Postgres dialect as the closest fit. Most common `SELECT` workloads run fine; complex expressions may generate SQL that Hotdata doesn't support — use `con.sql(...)` as a fallback.
+SQL compilation uses Ibis's Postgres dialect. Use `con.sql(...)` as a fallback for expressions that don't compile cleanly.
 
 ## Development
 
@@ -179,18 +216,16 @@ CI: `uv sync --locked && uv run pytest`.
 Set your credentials, then run any example script:
 
 ```bash
-export HOTDATA_API_KEY=…
-export HOTDATA_WORKSPACE=…
+export HOTDATA_API_KEY=...
+export HOTDATA_WORKSPACE=...
 uv run python examples/01_catalog_introspection.py
 uv run python examples/02_execute_sql.py 'SELECT COUNT(*) AS n FROM tpch.tpch_sf1.customer'
 uv run python examples/03_connect_via_url.py
 uv run python examples/04_ibis_table_workflows.py
 ```
 
-The examples assume a TPC-H dataset at `tpch.tpch_sf1`. To provision it: create a DuckDB connection in Hotdata, then run `CALL dbgen(sf = 1)` using DuckDB's [tpch extension](https://duckdb.org/docs/extensions/tpch.html).
-
 ## References
 
+- [Hotdata documentation](https://www.hotdata.dev/docs/ibis)
 - [Hotdata Python SDK](https://github.com/hotdata-dev/sdk-python)
-- [Hotdata API reference](https://www.hotdata.dev/docs/api-reference) · [Hotdata SQL](https://www.hotdata.dev/docs/sql)
-- [Ibis documentation](https://ibis-project.org/) · [Ibis backend concepts](https://ibis-project.org/concepts/backend-table-hierarchy.qmd)
+- [Ibis documentation](https://ibis-project.org/)
