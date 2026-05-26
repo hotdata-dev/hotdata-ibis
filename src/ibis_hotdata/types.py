@@ -45,13 +45,23 @@ _DURATION_RE = re.compile(r"^duration\[(\w+)\]$", re.IGNORECASE)
 _DECIMAL_RE = re.compile(r"^decimal128?\((\d+),\s*(\d+)\)$", re.IGNORECASE)
 _LIST_RE = re.compile(r"^(?:large_)?list<item:\s*(.+)>$", re.IGNORECASE)
 
-# Map Arrow time-unit strings to Ibis IntervalUnit strings.
+# Map Arrow time-unit strings to Ibis IntervalUnit strings and Timestamp scales.
+# Scales follow PyArrow's convention: s→0, ms→3, us→6, ns→9.
 _ARROW_UNIT_TO_IBIS: dict[str, str] = {
     "s": "s",
     "ms": "ms",
     "us": "us",
     "ns": "ns",
 }
+_ARROW_UNIT_TO_TIMESTAMP_SCALE: dict[str, int] = {
+    "s": 0,
+    "ms": 3,
+    "us": 6,
+    "ns": 9,
+}
+
+# Suffix appended by PyArrow when a list's item field is non-nullable.
+_NOT_NULL_SUFFIX_RE = re.compile(r"\s+not\s+null$", re.IGNORECASE)
 
 
 def _parse_parametric_arrow_type(raw: str, *, nullable: bool) -> dt.DataType | None:
@@ -62,8 +72,10 @@ def _parse_parametric_arrow_type(raw: str, *, nullable: bool) -> dt.DataType | N
     """
     m = _TIMESTAMP_RE.match(raw)
     if m:
+        unit = m.group(1).lower()
         tz: str | None = m.group(2).strip() if m.group(2) else None
-        return dt.Timestamp(timezone=tz, nullable=nullable)
+        scale: int | None = _ARROW_UNIT_TO_TIMESTAMP_SCALE.get(unit)
+        return dt.Timestamp(timezone=tz, scale=scale, nullable=nullable)
 
     m = _DURATION_RE.match(raw)
     if m:
@@ -76,7 +88,12 @@ def _parse_parametric_arrow_type(raw: str, *, nullable: bool) -> dt.DataType | N
 
     m = _LIST_RE.match(raw)
     if m:
-        value_type = dtype_from_hotdata_sql_type(m.group(1).strip(), nullable=True)
+        item_raw = m.group(1).strip()
+        # PyArrow appends " not null" for non-nullable item fields; strip it and
+        # pass nullable=False so the element type is marked non-nullable.
+        item_not_null = bool(_NOT_NULL_SUFFIX_RE.search(item_raw))
+        item_str = _NOT_NULL_SUFFIX_RE.sub("", item_raw).strip()
+        value_type = dtype_from_hotdata_sql_type(item_str, nullable=not item_not_null)
         return dt.Array(value_type=value_type, nullable=nullable)
 
     return None

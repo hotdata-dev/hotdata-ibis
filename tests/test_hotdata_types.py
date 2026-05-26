@@ -77,21 +77,22 @@ def test_dtype_from_hotdata_arrow_type_names(sql_type, nullable, expected_cls):
 
 
 @pytest.mark.parametrize(
-    ("sql_type", "expected_tz"),
+    ("sql_type", "expected_tz", "expected_scale"),
     [
-        ("timestamp[s]", None),
-        ("timestamp[ms]", None),
-        ("timestamp[us]", None),
-        ("timestamp[ns]", None),
-        ("timestamp[us, tz=UTC]", "UTC"),
-        ("timestamp[us, tz=America/New_York]", "America/New_York"),
-        ("TIMESTAMP[US]", None),
+        ("timestamp[s]", None, 0),
+        ("timestamp[ms]", None, 3),
+        ("timestamp[us]", None, 6),
+        ("timestamp[ns]", None, 9),
+        ("timestamp[us, tz=UTC]", "UTC", 6),
+        ("timestamp[us, tz=America/New_York]", "America/New_York", 6),
+        ("TIMESTAMP[MS]", None, 3),
     ],
 )
-def test_dtype_from_hotdata_arrow_timestamp(sql_type, expected_tz):
+def test_dtype_from_hotdata_arrow_timestamp(sql_type, expected_tz, expected_scale):
     out = dtype_from_hotdata_sql_type(sql_type, nullable=True)
     assert isinstance(out, dt.Timestamp)
     assert out.timezone == expected_tz
+    assert out.scale == expected_scale
     assert out.nullable is True
 
 
@@ -130,17 +131,22 @@ def test_dtype_from_hotdata_arrow_decimal(sql_type, expected_precision, expected
 
 
 @pytest.mark.parametrize(
-    ("sql_type", "expected_value_cls"),
+    ("sql_type", "expected_value_cls", "expected_item_nullable"),
     [
-        ("list<item: int32>", dt.Int32),
-        ("list<item: utf8>", dt.String),
-        ("list<item: float64>", dt.Float64),
-        ("large_list<item: int64>", dt.Int64),
-        ("LIST<ITEM: UINT8>", dt.UInt8),
+        ("list<item: int32>", dt.Int32, True),
+        ("list<item: utf8>", dt.String, True),
+        ("list<item: float64>", dt.Float64, True),
+        ("large_list<item: int64>", dt.Int64, True),
+        ("LIST<ITEM: UINT8>", dt.UInt8, True),
+        # Non-nullable item fields — PyArrow appends " not null"
+        ("list<item: int32 not null>", dt.Int32, False),
+        ("list<item: utf8 not null>", dt.String, False),
+        ("large_list<item: float32 not null>", dt.Float32, False),
     ],
 )
-def test_dtype_from_hotdata_arrow_list(sql_type, expected_value_cls):
+def test_dtype_from_hotdata_arrow_list(sql_type, expected_value_cls, expected_item_nullable):
     out = dtype_from_hotdata_sql_type(sql_type, nullable=True)
     assert isinstance(out, dt.Array)
     assert isinstance(out.value_type, expected_value_cls)
+    assert out.value_type.nullable is expected_item_nullable
     assert out.nullable is True
