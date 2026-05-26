@@ -55,6 +55,15 @@ def test_dtype_from_hotdata_malformed_fallback_string():
         ("LargeBinary", True, dt.Binary),
         ("Time32", True, dt.Time),
         ("Time64", False, dt.Time),
+        # Previously missing: signed int8 (Postgres "int8" means int64, not int8)
+        ("int8", True, dt.Int8),
+        ("Int8", False, dt.Int8),
+        # Previously missing: halffloat (PyArrow's str() name for float16)
+        ("halffloat", True, dt.Float16),
+        ("HALFFLOAT", False, dt.Float16),
+        # Previously missing: large_string (PyArrow large-offset string variant)
+        ("large_string", True, dt.String),
+        ("Large_String", False, dt.String),
         # Case-insensitive
         ("date32", True, dt.Date),
         ("FLOAT64", True, dt.Float64),
@@ -65,3 +74,73 @@ def test_dtype_from_hotdata_arrow_type_names(sql_type, nullable, expected_cls):
     out = dtype_from_hotdata_sql_type(sql_type, nullable=nullable)
     assert out.nullable is nullable
     assert isinstance(out, expected_cls)
+
+
+@pytest.mark.parametrize(
+    ("sql_type", "expected_tz"),
+    [
+        ("timestamp[s]", None),
+        ("timestamp[ms]", None),
+        ("timestamp[us]", None),
+        ("timestamp[ns]", None),
+        ("timestamp[us, tz=UTC]", "UTC"),
+        ("timestamp[us, tz=America/New_York]", "America/New_York"),
+        ("TIMESTAMP[US]", None),
+    ],
+)
+def test_dtype_from_hotdata_arrow_timestamp(sql_type, expected_tz):
+    out = dtype_from_hotdata_sql_type(sql_type, nullable=True)
+    assert isinstance(out, dt.Timestamp)
+    assert out.timezone == expected_tz
+    assert out.nullable is True
+
+
+@pytest.mark.parametrize(
+    ("sql_type", "expected_unit"),
+    [
+        ("duration[s]", "s"),
+        ("duration[ms]", "ms"),
+        ("duration[us]", "us"),
+        ("duration[ns]", "ns"),
+        ("DURATION[MS]", "ms"),
+    ],
+)
+def test_dtype_from_hotdata_arrow_duration(sql_type, expected_unit):
+    out = dtype_from_hotdata_sql_type(sql_type, nullable=False)
+    assert isinstance(out, dt.Interval)
+    assert out.unit.value == expected_unit
+    assert out.nullable is False
+
+
+@pytest.mark.parametrize(
+    ("sql_type", "expected_precision", "expected_scale"),
+    [
+        ("decimal128(10, 3)", 10, 3),
+        ("decimal128(38, 0)", 38, 0),
+        ("decimal(5, 2)", 5, 2),
+        ("DECIMAL128(18, 6)", 18, 6),
+    ],
+)
+def test_dtype_from_hotdata_arrow_decimal(sql_type, expected_precision, expected_scale):
+    out = dtype_from_hotdata_sql_type(sql_type, nullable=True)
+    assert isinstance(out, dt.Decimal)
+    assert out.precision == expected_precision
+    assert out.scale == expected_scale
+    assert out.nullable is True
+
+
+@pytest.mark.parametrize(
+    ("sql_type", "expected_value_cls"),
+    [
+        ("list<item: int32>", dt.Int32),
+        ("list<item: utf8>", dt.String),
+        ("list<item: float64>", dt.Float64),
+        ("large_list<item: int64>", dt.Int64),
+        ("LIST<ITEM: UINT8>", dt.UInt8),
+    ],
+)
+def test_dtype_from_hotdata_arrow_list(sql_type, expected_value_cls):
+    out = dtype_from_hotdata_sql_type(sql_type, nullable=True)
+    assert isinstance(out, dt.Array)
+    assert isinstance(out.value_type, expected_value_cls)
+    assert out.nullable is True
