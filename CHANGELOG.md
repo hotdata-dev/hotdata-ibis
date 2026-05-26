@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-05-26
+
+### Added
+
+- Parametric Arrow type strings returned by the information schema are now mapped correctly:
+  `timestamp[unit, tz=…]` (with scale preserved), `duration[unit]`, `decimal128(p, s)` /
+  `decimal256(p, s)` / `decimal(p, s)`, and `list<item: T>` / `large_list<item: T>`
+  (including non-nullable item fields). Previously all of these fell back to `String`.
+- Simple Arrow type aliases extended: `halffloat` (PyArrow's name for `float16`),
+  `large_string`, all four signed integer variants (`int8`–`int64`), and all four unsigned
+  integer variants (`uint8`–`uint64`) are now resolved correctly.
+
+### Changed
+
+- **Default schema for managed databases changed from `"public"` to `"main"`** to match
+  runtimedb's `DEFAULT_SCHEMA_NAME`. runtimedb always auto-inserts a `main` schema into
+  every managed database; using `"public"` previously created a spurious empty `main`
+  schema alongside the declared `public` one.
+- Arrow type construction now goes through PyArrow's type system as the authoritative bridge
+  (`pa.DataType` → `PyArrowType.to_ibis()`), replacing manual Ibis type construction.
+- `_IN_FLIGHT` query-run statuses trimmed to `{"running"}` — runtimedb `QueryRunStatus`
+  only emits `running`, `succeeded`, and `failed`; `queued` and `pending` are result
+  statuses, not query-run statuses.
+
+### Fixed
+
+- Decimal regex tightened: `decimal128?` → `decimal(?:128|256)?` so `decimal12(…)` is
+  no longer mistakenly matched as a decimal type.
+- Unknown `duration` unit now falls through to the Postgres parser / `String` fallback
+  instead of silently defaulting to seconds.
+
 ## [0.1.2] - 2026-05-24
 
 ### Added
