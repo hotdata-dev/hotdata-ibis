@@ -25,7 +25,7 @@ con = ibis.hotdata.connect(
 )
 
 # 1. Create a database and declare the tables you'll load
-con.create_database("sales", schema="public", tables=["orders"])
+con.create_database("sales", tables=["orders"])
 
 # 2. Upload a pandas DataFrame (or PyArrow table)
 df = pd.DataFrame({
@@ -33,14 +33,14 @@ df = pd.DataFrame({
     "amount": [9.99, 49.99, 5.00],
     "region": ["west", "east", "west"],
 })
-con.create_table("orders", df, database=("sales", "public"), overwrite=True)
+con.create_table("orders", df, database=("sales", "main"), overwrite=True)
 
 # 3. Uploads are async — wait briefly before querying
 time.sleep(2)
 
 # 4. Query with Ibis expressions
 #    Managed tables are always accessed with catalog "default"
-t = con.table("orders", database=("default", "public"))
+t = con.table("orders", database=("default", "main"))
 result = (
     t.group_by("region")
     .agg(total=t.amount.sum())
@@ -49,7 +49,7 @@ result = (
 )
 
 # 5. Clean up
-con.drop_table("orders", database=("sales", "public"))
+con.drop_table("orders", database=("sales", "main"))
 con.drop_database("sales")
 ```
 
@@ -90,22 +90,22 @@ Managed databases are the primary way to bring data into Hotdata with Ibis. Decl
 
 ```python
 # Declare the database and all table names up front
-con.create_database("analytics", schema="public", tables=["events", "users"])
+con.create_database("analytics", tables=["events", "users"])
 
 # Upload from a pandas DataFrame
-con.create_table("events", events_df, database=("analytics", "public"), overwrite=True)
+con.create_table("events", events_df, database=("analytics", "main"), overwrite=True)
 
 # PyArrow tables also work
 import pyarrow as pa
 table = pa.table({"id": [1, 2], "name": ["alice", "bob"]})
-con.create_table("users", table, database=("analytics", "public"), overwrite=True)
+con.create_table("users", table, database=("analytics", "main"), overwrite=True)
 
 # Schema-only (no data): creates an empty table with the declared schema
 import ibis.expr.schema as sch
 con.create_table(
     "staging",
     schema=sch.Schema({"id": "int64", "ts": "timestamp"}),
-    database=("analytics", "public"),
+    database=("analytics", "main"),
 )
 ```
 
@@ -116,7 +116,7 @@ Table names must be declared when the database is created — you cannot upload 
 When querying, use `"default"` as the catalog:
 
 ```python
-t = con.table("events", database=("default", "public"))
+t = con.table("events", database=("default", "main"))
 
 result = (
     t.filter(t.event_type == "click")
@@ -131,7 +131,7 @@ Or with raw SQL:
 ```python
 result = con.sql(
     'SELECT user_id, COUNT(*) AS n '
-    'FROM "default"."public"."events" '
+    'FROM "default"."main"."events" '
     'WHERE event_type = \'click\' '
     'GROUP BY user_id'
 ).execute()
@@ -142,8 +142,8 @@ result = con.sql(
 Pass `force=True` to silently skip errors when the database or table does not exist:
 
 ```python
-con.drop_table("events", database=("analytics", "public"))
-con.drop_table("events", database=("analytics", "public"), force=True)  # no-op if missing
+con.drop_table("events", database=("analytics", "main"))
+con.drop_table("events", database=("analytics", "main"), force=True)  # no-op if missing
 
 con.drop_database("analytics")
 con.drop_database("analytics", force=True)  # no-op if missing
@@ -161,7 +161,7 @@ con.drop_database("analytics", force=True)  # no-op if missing
 ### Ibis expressions
 
 ```python
-t = con.table("orders", database=("default", "public"))
+t = con.table("orders", database=("default", "main"))
 
 summary = (
     t.filter(t.amount > 10)
@@ -178,7 +178,7 @@ summary = (
 
 ```python
 base = con.sql(
-    'SELECT * FROM "default"."public"."orders"',
+    'SELECT * FROM "default"."main"."orders"',
     dialect="postgres",
 )
 result = base.filter(base.amount > 10).execute()

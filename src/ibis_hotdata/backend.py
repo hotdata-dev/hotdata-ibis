@@ -576,7 +576,7 @@ class Backend(
         /,
         *,
         catalog: str | None = None,
-        schema: str = "public",
+        schema: str = "main",
         tables: Sequence[str] | None = None,
         force: bool = False,
     ) -> None:

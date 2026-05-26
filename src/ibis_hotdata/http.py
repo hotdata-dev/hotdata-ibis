@@ -37,7 +37,8 @@ T = TypeVar("T")
 APPLICATION_ARROW_STREAM = "application/vnd.apache.arrow.stream"
 
 # Statuses that mean the query run is still in progress.
-_IN_FLIGHT = {"running", "queued", "pending"}
+# runtimedb QueryRunStatus only emits "running", "succeeded", "failed".
+_IN_FLIGHT = {"running"}
 
 
 def _sleep_until(deadline: float, interval: float) -> None:
