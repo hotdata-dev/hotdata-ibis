@@ -113,13 +113,22 @@ def test_dtype_from_hotdata_arrow_duration(sql_type, expected_unit):
     assert out.nullable is False
 
 
+def test_dtype_from_hotdata_arrow_duration_unknown_unit_falls_back():
+    # An unrecognised duration unit should not silently map to seconds;
+    # it falls through to the Postgres parser (which returns Unknown) or String fallback.
+    out = dtype_from_hotdata_sql_type("duration[foo]", nullable=True)
+    assert not isinstance(out, dt.Interval)  # must not produce a valid Interval
+
+
 @pytest.mark.parametrize(
     ("sql_type", "expected_precision", "expected_scale"),
     [
         ("decimal128(10, 3)", 10, 3),
         ("decimal128(38, 0)", 38, 0),
+        ("decimal256(76, 38)", 76, 38),
         ("decimal(5, 2)", 5, 2),
         ("DECIMAL128(18, 6)", 18, 6),
+        # decimal12 is NOT a valid form — should not be matched by the decimal regex
     ],
 )
 def test_dtype_from_hotdata_arrow_decimal(sql_type, expected_precision, expected_scale):
@@ -150,3 +159,10 @@ def test_dtype_from_hotdata_arrow_list(sql_type, expected_value_cls, expected_it
     assert isinstance(out.value_type, expected_value_cls)
     assert out.value_type.nullable is expected_item_nullable
     assert out.nullable is True
+
+
+def test_dtype_from_hotdata_arrow_decimal12_not_matched():
+    # "decimal12" (only the trailing 8 made optional) must NOT match the decimal regex.
+    # The Postgres parser handles bare "decimal" forms; decimal12 is not a real type.
+    out = dtype_from_hotdata_sql_type("decimal12(10, 3)", nullable=True)
+    assert not isinstance(out, dt.Decimal)  # falls through to Unknown or String

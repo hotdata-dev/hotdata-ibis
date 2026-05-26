@@ -42,7 +42,7 @@ _ARROW_TYPE_MAP: dict[str, type[dt.DataType]] = {
 # embedded parameters (unit, timezone, precision, value type, …).
 _TIMESTAMP_RE = re.compile(r"^timestamp\[(\w+)(?:,\s*tz=(.+))?\]$", re.IGNORECASE)
 _DURATION_RE = re.compile(r"^duration\[(\w+)\]$", re.IGNORECASE)
-_DECIMAL_RE = re.compile(r"^decimal128?\((\d+),\s*(\d+)\)$", re.IGNORECASE)
+_DECIMAL_RE = re.compile(r"^decimal(?:128|256)?\((\d+),\s*(\d+)\)$", re.IGNORECASE)
 _LIST_RE = re.compile(r"^(?:large_)?list<item:\s*(.+)>$", re.IGNORECASE)
 
 # Map Arrow time-unit strings to Ibis IntervalUnit strings and Timestamp scales.
@@ -79,7 +79,9 @@ def _parse_parametric_arrow_type(raw: str, *, nullable: bool) -> dt.DataType | N
 
     m = _DURATION_RE.match(raw)
     if m:
-        unit = _ARROW_UNIT_TO_IBIS.get(m.group(1).lower(), "s")
+        unit = _ARROW_UNIT_TO_IBIS.get(m.group(1).lower())
+        if unit is None:
+            return None  # unrecognised unit — fall through to Postgres parser / String fallback
         return dt.Interval(unit=unit, nullable=nullable)
 
     m = _DECIMAL_RE.match(raw)
