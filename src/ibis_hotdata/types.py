@@ -80,7 +80,8 @@ def _pa_type_from_arrow_str(raw: str) -> pa.DataType | None:
     m = _TIMESTAMP_RE.match(s)
     if m:
         unit = m.group(1).lower()
-        tz: str | None = m.group(2).strip() if m.group(2) else None
+        tz_raw = m.group(2)
+        tz: str | None = tz_raw.strip() if tz_raw else None
         try:
             return pa.timestamp(unit, tz=tz)
         except Exception:

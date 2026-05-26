@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http
 import io
 import json
 import time
@@ -29,8 +30,6 @@ from hotdata.models.create_database_request import CreateDatabaseRequest
 from hotdata.models.database_default_schema_decl import DatabaseDefaultSchemaDecl
 from hotdata.models.database_default_table_decl import DatabaseDefaultTableDecl
 from hotdata.models.load_managed_table_request import LoadManagedTableRequest
-
-from ibis_hotdata.managed import DEFAULT_SCHEMA
 
 T = TypeVar("T")
 
@@ -197,7 +196,7 @@ class HotdataClient:
         self,
         description: str | None = None,
         *,
-        schema: str = DEFAULT_SCHEMA,
+        schema: str = "public",
         tables: Sequence[str] = (),
     ) -> dict[str, Any]:
         """POST ``/v1/databases`` — creates a managed database with an auto-provisioned default catalog."""
@@ -264,27 +263,27 @@ class HotdataClient:
             status = raw.status
             ctype = (raw.headers.get("Content-Type") or "").split(";")[0].strip().lower()
 
-            if status == 200 and ctype == APPLICATION_ARROW_STREAM.lower():
+            if status == http.HTTPStatus.OK and ctype == APPLICATION_ARROW_STREAM.lower():
                 table = _ipc_stream_bytes_to_table(body)
                 return self._arrow_payload_from_table(table, result_id=result_id)
 
-            if status == 202:
+            if status == http.HTTPStatus.ACCEPTED:
                 _sleep_until(deadline, poll_interval_s)
                 continue
 
-            if status == 409:
+            if status == http.HTTPStatus.CONFLICT:
                 d = _json_utf8(body) if body else {}
                 raise HotdataAPIError(
                     d.get("error_message") or "Result failed",
-                    status_code=409,
+                    status_code=http.HTTPStatus.CONFLICT,
                     body=d,
                 )
 
-            if status == 404:
+            if status == http.HTTPStatus.NOT_FOUND:
                 d = _json_utf8(body) if body else {}
                 raise HotdataAPIError(
                     d.get("detail") or f"Result {result_id!r} not found",
-                    status_code=404,
+                    status_code=http.HTTPStatus.NOT_FOUND,
                     body=d,
                 )
 
@@ -304,7 +303,7 @@ class HotdataClient:
     ) -> dict[str, Any]:
         sch = table.schema
         columns = sch.names
-        nullable = [sch.field(i).nullable for i in range(len(columns))]
+        nullable = [field.nullable for field in sch]
         return {
             "format": "arrow",
             "pa_table": table,
