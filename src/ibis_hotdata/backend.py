@@ -43,7 +43,6 @@ from ibis.backends import (
 from ibis.backends.sql import SQLBackend
 
 from ibis_hotdata.http import HotdataAPIError, HotdataClient
-from ibis_hotdata.managed import DEFAULT_SCHEMA
 from ibis_hotdata.types import dtype_from_hotdata_sql_type
 
 _INFORMATION_SCHEMA_PAGE_SIZE = 500
@@ -203,7 +202,7 @@ class Backend(
         )
 
     def disconnect(self) -> None:
-        if getattr(self, "_http", None) is not None:
+        if hasattr(self, "_http"):
             self._http.close()
 
     # --- hierarchy ---------------------------------------------------------
@@ -253,10 +252,12 @@ class Backend(
         """Use the compiler SQL dialect when stringifying qualifiers (backend name is not a dialect)."""
 
         dialect = self.dialect
-        if (sg_cat := table_loc.args["catalog"]) is not None:
+        sg_cat = table_loc.args["catalog"]
+        if sg_cat is not None:
             sg_cat.args["quoted"] = False
             sg_cat = sg_cat.sql(dialect=dialect)
-        if (sg_db := table_loc.args["db"]) is not None:
+        sg_db = table_loc.args["db"]
+        if sg_db is not None:
             sg_db.args["quoted"] = False
             sg_db = sg_db.sql(dialect=dialect)
 
@@ -429,7 +430,7 @@ class Backend(
                 db = self._http.get_database(self._database_id)
                 self._database_connection_id = db.get("default_connection_id")
             except HotdataAPIError:
-                pass
+                pass  # best-effort: if the lookup fails, callers fall back to the catalog name
         return self._database_connection_id
 
     # --- schema / sql execution --------------------------------------------
@@ -575,7 +576,7 @@ class Backend(
         /,
         *,
         catalog: str | None = None,
-        schema: str = DEFAULT_SCHEMA,
+        schema: str = "main",
         tables: Sequence[str] | None = None,
         force: bool = False,
     ) -> None:
@@ -722,7 +723,7 @@ class Backend(
             raise _ibis_err_from_hotdata(exc) from exc
 
     def _register_in_memory_table(self, _op: ops.InMemoryTable) -> None:
-        return
+        pass  # Hotdata has no local in-memory table concept; Ibis calls this hook before execute
 
     @cached_property
     def version(self) -> str:
