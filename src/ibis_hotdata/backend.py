@@ -337,7 +337,7 @@ class Backend(
         raise com.IbisError(f"Unknown Hotdata connection {name_or_id!r}")
 
     def _find_managed_connection(self, name_or_id: str) -> dict[str, Any] | None:
-        """Look up a managed database by id or description.
+        """Look up a managed database by id or name.
 
         Returns the detail dict if found, ``None`` if not found.
         Raises :class:`~ibis.common.exceptions.IbisError` on API failures.
@@ -347,13 +347,13 @@ class Backend(
         except HotdataAPIError as exc:
             if exc.status_code != 404:
                 raise _ibis_err_from_hotdata(exc) from exc
-        # Fall back to description scan
+        # Fall back to name scan
         try:
             data = self._http.list_databases()
         except HotdataAPIError as exc:
             raise _ibis_err_from_hotdata(exc) from exc
         for db in data.get("databases", []):
-            if db.get("description") == name_or_id:
+            if db.get("name") == name_or_id:
                 try:
                     return self._http.get_database(db["id"])
                 except HotdataAPIError as exc:
@@ -361,7 +361,7 @@ class Backend(
         return None
 
     def _resolve_managed_connection(self, name_or_id: str) -> dict[str, Any]:
-        """Resolve a managed database by id or description, returning its detail dict."""
+        """Resolve a managed database by id or name, returning its detail dict."""
         result = self._find_managed_connection(name_or_id)
         if result is None:
             raise com.IbisError(f"Unknown managed database {name_or_id!r}")
@@ -585,7 +585,7 @@ class Backend(
             raise com.UnsupportedOperationError(
                 "Hotdata create_database creates a managed connection (catalog); catalog= is not supported"
             )
-        # Check if a database with this description already exists.
+        # Check if a database with this name already exists.
         # Use _find_managed_connection so API errors (5xx) propagate while
         # a plain not-found returns None and is handled below.
         existing = self._find_managed_connection(name)
@@ -594,7 +594,7 @@ class Backend(
                 raise com.IbisInputError(f"Managed database {name!r} already exists")
             return
         try:
-            self._http.create_managed_database(description=name, schema=schema, tables=list(tables or ()))
+            self._http.create_managed_database(name=name, schema=schema, tables=list(tables or ()))
         except HotdataAPIError as exc:
             raise _ibis_err_from_hotdata(exc) from exc
 

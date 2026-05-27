@@ -195,7 +195,7 @@ class HotdataClient:
 
     def create_managed_database(
         self,
-        description: str | None = None,
+        name: str | None = None,
         *,
         schema: str = "public",
         tables: Sequence[str] = (),
@@ -209,7 +209,7 @@ class HotdataClient:
                     tables=[DatabaseDefaultTableDecl(name=t) for t in tables],
                 )
             ]
-        req = CreateDatabaseRequest(description=description, schemas=schemas)
+        req = CreateDatabaseRequest(name=name, schemas=schemas)
         resp = self._safe_call(self._databases.create_database, req)
         return resp.model_dump(by_alias=True, mode="json")
 

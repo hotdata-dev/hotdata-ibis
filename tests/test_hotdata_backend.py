@@ -48,7 +48,7 @@ def managed_databases_response() -> dict:
         "databases": [
             {
                 "id": MANAGED_DB_ID,
-                "description": MANAGED_NAME,
+                "name": MANAGED_NAME,
             }
         ]
     }
@@ -57,7 +57,7 @@ def managed_databases_response() -> dict:
 def managed_database_detail_response() -> dict:
     return {
         "id": MANAGED_DB_ID,
-        "description": MANAGED_NAME,
+        "name": MANAGED_NAME,
         "default_connection_id": MANAGED_CONN,
         "expires_at": None,
         "attachments": [],
@@ -483,14 +483,14 @@ def test_create_database_posts_managed_connection(httpserver: HTTPServer, srv: s
     def on_create(req: Request) -> Response:
         body = req.get_json()
         assert body == {
-            "description": "sales",
+            "name": "sales",
             "schemas": [{"name": "public", "tables": [{"name": "orders"}]}],
         }
         return Response(
             json.dumps(
                 {
                     "id": MANAGED_DB_ID,
-                    "description": "sales",
+                    "name": "sales",
                     "default_connection_id": MANAGED_CONN,
                     "expires_at": None,
                 }
@@ -513,13 +513,13 @@ def test_create_database_posts_managed_connection(httpserver: HTTPServer, srv: s
 def test_create_database_sends_no_schemas_when_no_tables(httpserver: HTTPServer, srv: str):
     def on_create(req: Request) -> Response:
         body = req.get_json()
-        assert body.get("description") == "empty_db"
+        assert body.get("name") == "empty_db"
         assert not body.get("schemas")  # no tables → no schemas declared
         return Response(
             json.dumps(
                 {
                     "id": MANAGED_DB_ID,
-                    "description": "empty_db",
+                    "name": "empty_db",
                     "default_connection_id": MANAGED_CONN,
                     "expires_at": None,
                 }
