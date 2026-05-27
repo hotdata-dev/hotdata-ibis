@@ -353,7 +353,7 @@ class Backend(
         except HotdataAPIError as exc:
             raise _ibis_err_from_hotdata(exc) from exc
         for db in data.get("databases", []):
-            if db.get("description") == name_or_id:
+            if db.get("name") == name_or_id:
                 try:
                     return self._http.get_database(db["id"])
                 except HotdataAPIError as exc:

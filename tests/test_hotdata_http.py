@@ -222,14 +222,14 @@ def test_create_managed_database(httpserver: HTTPServer):
     def on_create(req: Request) -> Response:
         body = req.get_json()
         assert body == {
-            "description": "sales",
+            "name": "sales",
             "schemas": [{"name": "public", "tables": [{"name": "orders"}]}],
         }
         return Response(
             json.dumps(
                 {
                     "id": "db_sales",
-                    "description": "sales",
+                    "name": "sales",
                     "default_connection_id": "conn_sales",
                     "expires_at": None,
                 }

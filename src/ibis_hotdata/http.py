@@ -209,7 +209,7 @@ class HotdataClient:
                     tables=[DatabaseDefaultTableDecl(name=t) for t in tables],
                 )
             ]
-        req = CreateDatabaseRequest(description=description, schemas=schemas)
+        req = CreateDatabaseRequest(name=description, schemas=schemas)
         resp = self._safe_call(self._databases.create_database, req)
         return resp.model_dump(by_alias=True, mode="json")
 
