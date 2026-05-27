@@ -11,3 +11,5 @@ build/
 htmlcov/
 
 .DS_Store
+integration_test.py
+smoke_test.py
