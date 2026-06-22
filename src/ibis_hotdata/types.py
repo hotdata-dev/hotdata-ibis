@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import re
 
-import pyarrow as pa
 import ibis.expr.datatypes as dt
+import pyarrow as pa
 from ibis.backends.sql.datatypes import PostgresType
 from ibis.formats.pyarrow import PyArrowType
 
@@ -100,8 +100,12 @@ def _pa_type_from_arrow_str(raw: str) -> pa.DataType | None:
     if m:
         precision, scale = int(m.group(1)), int(m.group(2))
         try:
-            # decimal128 supports precision 1–38; fall back to decimal256 for wider values
-            return pa.decimal128(precision, scale) if precision <= 38 else pa.decimal256(precision, scale)
+            # decimal128 supports precision 1-38; fall back to decimal256 for wider values
+            return (
+                pa.decimal128(precision, scale)
+                if precision <= 38
+                else pa.decimal256(precision, scale)
+            )
         except Exception:
             return None
 
@@ -127,7 +131,7 @@ def dtype_from_hotdata_sql_type(sql_type: str | None, *, nullable: bool) -> dt.D
     Hotdata may return either SQL-style names (``INTEGER``, ``VARCHAR``, ``DOUBLE
     PRECISION``, …) or Arrow-style names (``Date32``, ``Float64``, ``Utf8``, …).
     Arrow-style names are resolved via PyArrow's type system and converted to Ibis
-    types using the Ibis–PyArrow bridge; SQL-style names fall through to the Postgres
+    types using the Ibis-PyArrow bridge; SQL-style names fall through to the Postgres
     dialect parser.
     """
     if not sql_type:

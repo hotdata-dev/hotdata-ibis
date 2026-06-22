@@ -23,7 +23,7 @@ DEFAULT_TPCH_SCHEMA = "tpch_sf1"
 
 
 def _verify(ns: argparse.Namespace) -> bool:
-    return False if getattr(ns, "insecure", False) else True
+    return not getattr(ns, "insecure", False)
 
 
 def _headers(ns: argparse.Namespace) -> dict[str, str]:
@@ -207,7 +207,7 @@ def connect_kwargs(ns: argparse.Namespace, **extras) -> dict:
         "token": ns.token.strip(),
         "workspace_id": ns.workspace_id.strip(),
         "timeout": ns.timeout,
-        "verify_ssl": False if getattr(ns, "insecure", False) else True,
+        "verify_ssl": not getattr(ns, "insecure", False),
     }
     if ns.session_id:
         kwargs["session_id"] = ns.session_id

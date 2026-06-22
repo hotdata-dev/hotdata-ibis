@@ -24,7 +24,7 @@ classifiers = [
 ]
 dependencies = [
   "ibis-framework>=10.0,<11",
-  "hotdata>=0.2.5",
+  "hotdata>=0.4.1",
   "pyarrow>=15",
   "pyarrow-hotfix>=0.6",
   "pandas>=2",
@@ -34,6 +34,7 @@ dependencies = [
 [dependency-groups]
 dev = [
   "httpx>=0.27",
+  "mypy>=1.11",
   "pytest>=8",
   "pytest-httpserver>=1",
   "ruff>=0.5",
@@ -55,10 +56,47 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
+[tool.mypy]
+python_version = "3.10"
+strict = true
+files = [
+  "src",
+  "tests",
+]
+mypy_path = ["src"]
+namespace_packages = true
+explicit_package_bases = true
+warn_unused_configs = true
+disallow_any_decorated = true
+disallow_any_explicit = true
+disallow_any_expr = true
+disallow_any_generics = true
+disallow_any_unimported = true
+disallow_subclassing_any = true
+disallow_untyped_calls = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+allow_untyped_globals = false
+implicit_reexport = false
+implicit_optional = false
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+warn_unreachable = true
+strict_equality = true
+strict_bytes = true
+extra_checks = true
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"
 
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "N", "C4", "DTZ", "T20", "RET", "SIM", "RUF"]
+
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["E402"]
-"examples/**/*.py" = ["E402"]
+"examples/**/*.py" = ["E402", "T201", "E501"]
+"scripts/**/*.py" = ["T201", "E501"]

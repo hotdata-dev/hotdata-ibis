@@ -18,9 +18,13 @@ _examples = Path(__file__).resolve().parent
 sys.path.insert(0, str(_examples))
 
 import ibis
-
-from _helpers import DEFAULT_TPCH_SCHEMA, DEFAULT_TPCH_CONNECTION
-from _helpers import connect_kwargs, parsed_args, parser
+from _helpers import (
+    DEFAULT_TPCH_CONNECTION,
+    DEFAULT_TPCH_SCHEMA,
+    connect_kwargs,
+    parsed_args,
+    parser,
+)
 
 _argp = parser("Inspect Hotdata via Ibis catalogs / schemas / tables.")
 _argp.add_argument(
