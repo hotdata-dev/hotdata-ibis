@@ -6,11 +6,10 @@ import json
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
-from werkzeug.wrappers import Request, Response
 from pytest_httpserver import HTTPServer
+from werkzeug.wrappers import Request, Response
 
 from ibis_hotdata.http import APPLICATION_ARROW_STREAM, HotdataAPIError, HotdataClient
-
 
 _QR_META = {
     "created_at": "2026-01-01T00:00:00Z",
@@ -230,6 +229,7 @@ def test_create_managed_database(httpserver: HTTPServer):
                 {
                     "id": "db_sales",
                     "name": "sales",
+                    "default_catalog": "default",
                     "default_connection_id": "conn_sales",
                     "expires_at": None,
                 }

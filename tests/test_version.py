@@ -1,5 +1,4 @@
 import re
-
 from importlib.metadata import version as dist_version
 
 import ibis_hotdata

@@ -10,9 +10,8 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any, TypeVar
 
 import pyarrow as pa
-import pyarrow_hotfix  # noqa: F401
 import pyarrow.ipc as pa_ipc
-
+import pyarrow_hotfix  # noqa: F401
 from hotdata import ApiClient, Configuration
 from hotdata.api import (
     ConnectionsApi,
@@ -127,7 +126,10 @@ class HotdataClient:
         return out.model_dump(by_alias=True, mode="json")
 
     def get_information_schema(self, params: Mapping[str, Any]) -> dict[str, Any]:
-        """GET ``/v1/information_schema`` — ``params`` uses REST names (``schema`` not ``var_schema``)."""
+        """GET ``/v1/information_schema``.
+
+        ``params`` uses REST names (``schema`` not ``var_schema``).
+        """
         out = self._safe_call(
             self._information_schema.information_schema,
             connection_id=params.get("connection_id"),
@@ -200,7 +202,10 @@ class HotdataClient:
         schema: str = "public",
         tables: Sequence[str] = (),
     ) -> dict[str, Any]:
-        """POST ``/v1/databases`` — creates a managed database with an auto-provisioned default catalog."""
+        """POST ``/v1/databases`` — creates a managed database.
+
+        The database is created with an auto-provisioned default catalog.
+        """
         schemas = None
         if tables:
             schemas = [

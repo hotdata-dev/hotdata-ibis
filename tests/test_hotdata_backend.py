@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Callable
-
 import io
 import json
+from collections.abc import Callable
 
 import ibis
 import ibis.common.exceptions as com
@@ -21,6 +20,7 @@ from pytest_httpserver import HTTPServer
 MANAGED_DB_ID = "db_sales"      # databases API id
 MANAGED_CONN = "conn_sales"     # default_connection_id (backing connection for loads)
 MANAGED_NAME = "sales"          # description
+MANAGED_CATALOG = "default"     # default_catalog (required by hotdata 0.4.1 db models)
 PUBLIC = "public"
 TPCH_CONN = "tpch"
 TPCH_SF1 = "tpch_sf1"
@@ -49,6 +49,7 @@ def managed_databases_response() -> dict:
             {
                 "id": MANAGED_DB_ID,
                 "name": MANAGED_NAME,
+                "default_catalog": MANAGED_CATALOG,
             }
         ]
     }
@@ -58,6 +59,7 @@ def managed_database_detail_response() -> dict:
     return {
         "id": MANAGED_DB_ID,
         "name": MANAGED_NAME,
+        "default_catalog": MANAGED_CATALOG,
         "default_connection_id": MANAGED_CONN,
         "expires_at": None,
         "attachments": [],
@@ -440,7 +442,7 @@ def test_create_table_rejects_unsupported_options(httpserver: HTTPServer, srv: s
             pd.DataFrame({"x": [1]}),
             schema=ibis.schema({"x": "int64"}),
         )
-    with pytest.raises(com.IbisInputError, match="pandas.DataFrame or pyarrow.Table"):
+    with pytest.raises(com.IbisInputError, match=r"pandas\.DataFrame or pyarrow\.Table"):
         con.create_table("tmp", obj=[{"x": 1}])
 
 
@@ -491,6 +493,7 @@ def test_create_database_posts_managed_connection(httpserver: HTTPServer, srv: s
                 {
                     "id": MANAGED_DB_ID,
                     "name": "sales",
+                    "default_catalog": MANAGED_CATALOG,
                     "default_connection_id": MANAGED_CONN,
                     "expires_at": None,
                 }
@@ -520,6 +523,7 @@ def test_create_database_sends_no_schemas_when_no_tables(httpserver: HTTPServer,
                 {
                     "id": MANAGED_DB_ID,
                     "name": "empty_db",
+                    "default_catalog": MANAGED_CATALOG,
                     "default_connection_id": MANAGED_CONN,
                     "expires_at": None,
                 }

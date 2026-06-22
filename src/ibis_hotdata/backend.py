@@ -111,18 +111,18 @@ class Backend(
         token = q.pop("token", None) or (unquote_plus(url.password) if url.password else None)
         workspace_id = q.pop("workspace_id", None)
 
-        kwargs = dict(
-            api_url=api_url,
-            token=token,
-            workspace_id=workspace_id,
-            session_id=q.pop("session_id", None),
-            timeout=timeout,
-            verify_ssl=verify_ssl,
-            default_connection=q.pop("default_connection", None),
-            default_schema=q.pop("default_schema", None),
-            poll_interval_s=float(q.pop("poll_interval_s", "0.25")),
-            poll_timeout_s=float(q.pop("poll_timeout_s", "600")),
-        )
+        kwargs = {
+            "api_url": api_url,
+            "token": token,
+            "workspace_id": workspace_id,
+            "session_id": q.pop("session_id", None),
+            "timeout": timeout,
+            "verify_ssl": verify_ssl,
+            "default_connection": q.pop("default_connection", None),
+            "default_schema": q.pop("default_schema", None),
+            "poll_interval_s": float(q.pop("poll_interval_s", "0.25")),
+            "poll_timeout_s": float(q.pop("poll_timeout_s", "600")),
+        }
 
         self._convert_kwargs(kwargs)
         if not kwargs.get("token"):
@@ -249,7 +249,10 @@ class Backend(
     # --- catalogs / databases ----------------------------------------------
 
     def _to_catalog_db_tuple(self, table_loc: sge.Table):
-        """Use the compiler SQL dialect when stringifying qualifiers (backend name is not a dialect)."""
+        """Use the compiler SQL dialect when stringifying qualifiers.
+
+        Backend name is not a dialect.
+        """
 
         dialect = self.dialect
         sg_cat = table_loc.args["catalog"]
@@ -406,7 +409,8 @@ class Backend(
             schema = database
             if conn is None:
                 raise com.IbisInputError(
-                    "create_table with database=schema requires default_connection or current catalog"
+                    "create_table with database=schema requires "
+                    "default_connection or current catalog"
                 )
         db_record = self._resolve_managed_connection(conn)
         conn_id = db_record["default_connection_id"]
@@ -583,7 +587,8 @@ class Backend(
         """Create a managed Hotdata connection (Ibis catalog) with optional declared tables."""
         if catalog is not None:
             raise com.UnsupportedOperationError(
-                "Hotdata create_database creates a managed connection (catalog); catalog= is not supported"
+                "Hotdata create_database creates a managed connection (catalog); "
+                "catalog= is not supported"
             )
         # Check if a database with this name already exists.
         # Use _find_managed_connection so API errors (5xx) propagate while
@@ -609,7 +614,8 @@ class Backend(
         """Delete a managed Hotdata connection (Ibis catalog)."""
         if catalog is not None:
             raise com.UnsupportedOperationError(
-                "Hotdata drop_database deletes a managed connection (catalog); catalog= is not supported"
+                "Hotdata drop_database deletes a managed connection (catalog); "
+                "catalog= is not supported"
             )
         try:
             db = self._resolve_managed_connection(name)

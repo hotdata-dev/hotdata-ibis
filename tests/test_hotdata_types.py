@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import pytest
-
 import ibis.expr.datatypes as dt
+import pytest
 
 from ibis_hotdata.types import dtype_from_hotdata_sql_type
 

@@ -21,7 +21,6 @@ _examples = Path(__file__).resolve().parent
 sys.path.insert(0, str(_examples))
 
 import ibis
-
 from _helpers import connect_kwargs, parsed_args, parser
 
 _argp = parser("Ibis table workflows → pandas (Hotdata / TPC-H).")
