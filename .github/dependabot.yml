@@ -6,4 +6,4 @@ updates:
       interval: daily
     allow:
       - dependency-name: hotdata
-      - dependency-name: hotdata-runtime
+      - dependency-name: hotdata-framework
