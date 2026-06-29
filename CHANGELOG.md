@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+
+## [0.1.6] - 2026-06-28
+
+### Changed
+
+- Raise the minimum `hotdata` SDK version to `>=0.5.0` (was `>=0.4.1`). Verified
+  end-to-end against the 0.5.0 SDK: no API drift in the surface the backend uses,
+  full offline test suite passing, and a live create/upload/query/drop flow.
+- Renamed internal references and architecture guardrails from `hotdata-runtime`
+  to `hotdata-framework` to track the renamed sibling package. `hotdata-ibis`
+  continues to depend only on the `hotdata` SDK, not `hotdata-framework`.
+
 ## [0.1.5] - 2026-06-01
 
 ### Changed
