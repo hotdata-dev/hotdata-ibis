@@ -67,6 +67,67 @@ def test_execute_query_async_poll(httpserver: HTTPServer):
     assert body["pa_table"].to_pydict() == {"n": [42]}
 
 
+def test_execute_query_forwards_database_id_to_poll_and_result(httpserver: HTTPServer):
+    """hotdata SDK >=0.6 requires X-Database-Id on get_query_run/get_result; the same
+    database_id used to submit the query must be forwarded to both follow-up calls.
+    """
+
+    def on_query(req: Request) -> Response:
+        assert req.headers["X-Database-Id"] == "db_sales"
+        return Response(
+            json.dumps(
+                {
+                    "query_run_id": "run1",
+                    "status": "queued",
+                    "status_url": "http://poll",
+                    "reason": None,
+                }
+            ),
+            status=202,
+            content_type="application/json",
+        )
+
+    httpserver.expect_oneshot_request("/v1/query", method="POST").respond_with_handler(on_query)
+
+    def on_query_run(req: Request) -> Response:
+        assert req.headers["X-Database-Id"] == "db_sales"
+        return Response(
+            json.dumps({**_QR_META, "status": "succeeded", "result_id": "res1", "id": "run1"}),
+            status=200,
+            content_type="application/json",
+        )
+
+    httpserver.expect_oneshot_request("/v1/query-runs/run1").respond_with_handler(on_query_run)
+
+    table = pa.table({"n": [42]})
+    sink = io.BytesIO()
+    with ipc.new_stream(sink, table.schema) as writer:
+        writer.write_table(table)
+    arrow_blob = sink.getvalue()
+
+    def on_result(req: Request) -> Response:
+        assert req.headers["X-Database-Id"] == "db_sales"
+        return Response(arrow_blob, status=200, content_type=APPLICATION_ARROW_STREAM)
+
+    httpserver.expect_oneshot_request("/v1/results/res1").respond_with_handler(on_result)
+
+    client = HotdataClient(
+        api_url=httpserver.url_for("/").rstrip("/"),
+        token="tok",
+        workspace_id="ws1",
+        verify_ssl=False,
+    )
+    body = client.execute_query(
+        "select 41+1",
+        database_id="db_sales",
+        poll_interval_s=0,
+        poll_timeout_s=5,
+    )
+    client.close()
+
+    assert body["pa_table"].to_pydict() == {"n": [42]}
+
+
 def test_query_error_raises(httpserver: HTTPServer):
     httpserver.expect_oneshot_request("/v1/query", method="POST").respond_with_json(
         {"detail": "bad"}, status=500

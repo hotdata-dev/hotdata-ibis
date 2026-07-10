@@ -157,9 +157,14 @@ class HotdataClient:
         out = self._safe_call(self._query.query, req, **kwargs)
         if isinstance(out, AsyncQueryResponse):
             query_run_id = out.query_run_id
+            effective_database_id = database_id or ""
             deadline = time.monotonic() + poll_timeout_s
             while time.monotonic() < deadline:
-                qr = self._safe_call(self._query_runs.get_query_run, query_run_id)
+                qr = self._safe_call(
+                    self._query_runs.get_query_run,
+                    query_run_id,
+                    x_database_id=effective_database_id,
+                )
                 status = qr.status
                 if status == "failed":
                     raise HotdataAPIError(qr.error_message or "Query run failed")
@@ -169,6 +174,7 @@ class HotdataClient:
                         raise HotdataAPIError("succeeded query run missing result_id")
                     return self._poll_result_arrow(
                         result_id,
+                        database_id=effective_database_id,
                         deadline=deadline,
                         poll_interval_s=poll_interval_s,
                     )
@@ -252,6 +258,7 @@ class HotdataClient:
         self,
         result_id: str,
         *,
+        database_id: str,
         deadline: float,
         poll_interval_s: float,
     ) -> dict[str, Any]:
@@ -260,6 +267,7 @@ class HotdataClient:
             try:
                 raw = self._results.get_result_without_preload_content(
                     result_id,
+                    x_database_id=database_id,
                     _headers={"Accept": APPLICATION_ARROW_STREAM},
                     _request_timeout=self._timeout,
                 )
