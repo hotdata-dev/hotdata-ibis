@@ -34,11 +34,11 @@ _PA_TYPE_MAP: dict[str, pa.DataType] = {
     "uint16": pa.uint16(),
     "uint32": pa.uint32(),
     "uint64": pa.uint64(),
-    # strings — large-offset variants not known to the Postgres parser
     "utf8": pa.utf8(),
     "largeutf8": pa.large_utf8(),
     "large_string": pa.large_utf8(),
     "string": pa.string(),
+    "utf8view": pa.string_view(),
     # binary
     "binary": pa.binary(),
     "largebinary": pa.large_binary(),

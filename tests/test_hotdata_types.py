@@ -63,6 +63,10 @@ def test_dtype_from_hotdata_malformed_fallback_string():
         # Previously missing: large_string (PyArrow large-offset string variant)
         ("large_string", True, dt.String),
         ("Large_String", False, dt.String),
+        # Previously missing: Utf8View (Arrow >=16 StringView layout; RuntimeDB's
+        # information schema reports this for plain string columns)
+        ("Utf8View", True, dt.String),
+        ("utf8view", False, dt.String),
         # Case-insensitive
         ("date32", True, dt.Date),
         ("FLOAT64", True, dt.Float64),
