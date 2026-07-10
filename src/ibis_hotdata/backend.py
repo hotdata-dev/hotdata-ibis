@@ -339,35 +339,24 @@ class Backend(
                 return conn
         raise com.IbisError(f"Unknown Hotdata connection {name_or_id!r}")
 
-    def _find_managed_connection(self, name_or_id: str) -> dict[str, Any] | None:
-        """Look up a managed database by id or name.
+    def _find_managed_connection(self, database_id: str) -> dict[str, Any] | None:
+        """Look up a managed database by id.
 
         Returns the detail dict if found, ``None`` if not found.
         Raises :class:`~ibis.common.exceptions.IbisError` on API failures.
         """
         try:
-            return self._http.get_database(name_or_id)
+            return self._http.get_database(database_id)
         except HotdataAPIError as exc:
-            if exc.status_code != 404:
-                raise _ibis_err_from_hotdata(exc) from exc
-        # Fall back to name scan
-        try:
-            data = self._http.list_databases()
-        except HotdataAPIError as exc:
+            if exc.status_code == 404:
+                return None
             raise _ibis_err_from_hotdata(exc) from exc
-        for db in data.get("databases", []):
-            if db.get("name") == name_or_id:
-                try:
-                    return self._http.get_database(db["id"])
-                except HotdataAPIError as exc:
-                    raise _ibis_err_from_hotdata(exc) from exc
-        return None
 
-    def _resolve_managed_connection(self, name_or_id: str) -> dict[str, Any]:
-        """Resolve a managed database by id or name, returning its detail dict."""
-        result = self._find_managed_connection(name_or_id)
+    def _resolve_managed_connection(self, database_id: str) -> dict[str, Any]:
+        """Resolve a managed database by id, returning its detail dict."""
+        result = self._find_managed_connection(database_id)
         if result is None:
-            raise com.IbisError(f"Unknown managed database {name_or_id!r}")
+            raise com.IbisError(f"Unknown managed database {database_id!r}")
         return result
 
     def _managed_table_synced(
@@ -583,42 +572,48 @@ class Backend(
         schema: str = "main",
         tables: Sequence[str] | None = None,
         force: bool = False,
-    ) -> None:
-        """Create a managed Hotdata connection (Ibis catalog) with optional declared tables."""
+    ) -> str:
+        """Create a managed Hotdata connection (Ibis catalog) with optional declared tables.
+
+        ``name`` is a display label only — Hotdata database names are not unique,
+        so existence can't be checked by name and ``force`` has no effect (kept
+        for interface compatibility with :class:`~ibis.backends.CanCreateDatabase`).
+        Returns the created database's id; pass that id, not ``name``, to
+        ``create_table``, ``drop_table``, and ``drop_database``.
+        """
         if catalog is not None:
             raise com.UnsupportedOperationError(
                 "Hotdata create_database creates a managed connection (catalog); "
                 "catalog= is not supported"
             )
-        # Check if a database with this name already exists.
-        # Use _find_managed_connection so API errors (5xx) propagate while
-        # a plain not-found returns None and is handled below.
-        existing = self._find_managed_connection(name)
-        if existing is not None:
-            if not force:
-                raise com.IbisInputError(f"Managed database {name!r} already exists")
-            return
         try:
-            self._http.create_managed_database(name=name, schema=schema, tables=list(tables or ()))
+            created = self._http.create_managed_database(
+                name=name, schema=schema, tables=list(tables or ())
+            )
         except HotdataAPIError as exc:
             raise _ibis_err_from_hotdata(exc) from exc
+        return created["id"]
 
     def drop_database(
         self,
-        name: str,
+        id: str,
         /,
         *,
         catalog: str | None = None,
         force: bool = False,
     ) -> None:
-        """Delete a managed Hotdata connection (Ibis catalog)."""
+        """Delete a managed Hotdata connection (Ibis catalog).
+
+        ``id`` must be the id returned by ``create_database``, not its
+        display name — Hotdata database names are not unique.
+        """
         if catalog is not None:
             raise com.UnsupportedOperationError(
                 "Hotdata drop_database deletes a managed connection (catalog); "
                 "catalog= is not supported"
             )
         try:
-            db = self._resolve_managed_connection(name)
+            db = self._resolve_managed_connection(id)
         except com.IbisInputError:
             raise
         except com.IbisError:
@@ -673,6 +668,10 @@ class Backend(
         overwrite: bool = False,
     ) -> ir.Table:
         """Upload local data into a declared managed table.
+
+        ``database``'s first element must be the managed database id returned
+        by ``create_database``, not its display name — Hotdata database names
+        are not unique.
 
         Hotdata loads always use ``replace`` mode (the only API option). When
         ``overwrite=False`` (the Ibis default), an existing synced table raises

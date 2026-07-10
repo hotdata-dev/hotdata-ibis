@@ -2,10 +2,10 @@
 """Ibis <-> Hotdata round trip: create a managed database, upload data, read it back.
 
 Demonstrates the managed-database read contract that ``hotdata-dlt-destination``'s
-live ibis backend depends on: bind ``database_id`` at connect time (resolved once,
-up front, the way a caller who only has the database's *name* would), then read
-through the ``"default"`` catalog -- both ``con.table(...)`` (pandas) and
-``con.sql(...)`` (pyarrow).
+live ibis backend depends on: bind ``database_id`` (the id returned by
+``create_database``, not its display name -- Hotdata database names are not
+unique) at connect time, then read through the ``"default"`` catalog -- both
+``con.table(...)`` (pandas) and ``con.sql(...)`` (pyarrow).
 
 Run against hosted Hotdata (the default) or a local cluster:
 
@@ -27,36 +27,16 @@ import time
 
 import ibis
 import pandas as pd
-from hotdata import ApiClient, Configuration
-from hotdata.api.databases_api import DatabasesApi
 
 DATABASE = "ibis_roundtrip_demo"
 SCHEMA = "public"
 API_BASE_URL = os.environ.get("HOTDATA_API_BASE_URL", "https://api.hotdata.dev")
 
 
-def resolve_database_id(*, api_url: str, token: str, workspace_id: str, name: str) -> str:
-    """Look up a managed database's id by name via the raw SDK.
-
-    Illustrative: this is the same lookup ``hotdata-dlt-destination``'s live ibis
-    backend wrapper does before calling ``ibis.hotdata.connect(database_id=...)``.
-    """
-    conf = Configuration(host=api_url, api_key=token, workspace_id=workspace_id)
-    client = ApiClient(conf)
-    try:
-        databases_api = DatabasesApi(client)
-        for db in databases_api.list_databases().databases:
-            if db.name == name:
-                return db.id
-        raise LookupError(f"managed database {name!r} not found")
-    finally:
-        client.close()
-
-
-def write(api_url: str, token: str, workspace_id: str) -> None:
+def write(api_url: str, token: str, workspace_id: str) -> str:
     """Create the managed database and upload a small pandas DataFrame into it."""
     con = ibis.hotdata.connect(api_url=api_url, token=token, workspace_id=workspace_id)
-    con.create_database(DATABASE, tables=["spans"], schema=SCHEMA, force=True)
+    database_id = con.create_database(DATABASE, tables=["spans"], schema=SCHEMA)
 
     df = pd.DataFrame(
         [
@@ -65,11 +45,12 @@ def write(api_url: str, token: str, workspace_id: str) -> None:
             {"span_id": "a3", "model": "claude-opus-4-8", "latency_ms": 590, "ok": False},
         ]
     )
-    con.create_table("spans", df, database=(DATABASE, SCHEMA), overwrite=True)
+    con.create_table("spans", df, database=(database_id, SCHEMA), overwrite=True)
     con.disconnect()
 
     # Uploads are async; give the load a moment to finish before querying.
     time.sleep(2)
+    return database_id
 
 
 def read_via_ibis(api_url: str, token: str, workspace_id: str, database_id: str) -> None:
@@ -102,9 +83,9 @@ def read_via_ibis(api_url: str, token: str, workspace_id: str, database_id: str)
     con.disconnect()
 
 
-def cleanup(api_url: str, token: str, workspace_id: str) -> None:
+def cleanup(api_url: str, token: str, workspace_id: str, database_id: str) -> None:
     con = ibis.hotdata.connect(api_url=api_url, token=token, workspace_id=workspace_id)
-    con.drop_database(DATABASE, force=True)
+    con.drop_database(database_id, force=True)
     con.disconnect()
 
 
@@ -113,18 +94,14 @@ def main() -> None:
     workspace_id = os.environ["HOTDATA_WORKSPACE"]
 
     print("== CREATE + WRITE (con.create_database / con.create_table) ==")
-    write(API_BASE_URL, token, workspace_id)
-
-    database_id = resolve_database_id(
-        api_url=API_BASE_URL, token=token, workspace_id=workspace_id, name=DATABASE
-    )
-    print(f"resolved {DATABASE!r} -> database_id={database_id}")
+    database_id = write(API_BASE_URL, token, workspace_id)
+    print(f"created database_id={database_id}")
 
     print("\n== READ, via the managed-database contract ==")
     read_via_ibis(API_BASE_URL, token, workspace_id, database_id)
 
     print("\n== CLEANUP ==")
-    cleanup(API_BASE_URL, token, workspace_id)
+    cleanup(API_BASE_URL, token, workspace_id, database_id)
 
 
 if __name__ == "__main__":
