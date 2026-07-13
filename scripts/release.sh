@@ -103,6 +103,7 @@ cmd_prepare() {
   [[ -n "$bump" ]] || { usage; die "missing bump kind or explicit version"; }
   need gh
   need python3
+  need uv
   ensure_clean
 
   local current new base branch pkg
@@ -122,10 +123,11 @@ cmd_prepare() {
 
   set_version "$new"
   update_changelog "$new"
+  uv lock
 
   branch="release/v${new}"
   git checkout -b "$branch"
-  git add pyproject.toml CHANGELOG.md
+  git add pyproject.toml CHANGELOG.md uv.lock
   git commit -m "chore: release v${new}"
 
   pkg="$(get_pkg_name)"
