@@ -24,11 +24,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `create_database`'s `force` parameter is now a no-op (kept only for
   interface compatibility with `ibis.backends.CanCreateDatabase`) since an
   "already exists" check by name is no longer meaningful.
-
-## [0.2.0] - 2026-07-10
-
-### Changed
-
 - Bump `ibis-framework` `>=10.0,<11` → `>=12,<13` to unblock co-installing
   `hotdata-ibis` alongside `hotdata-dlt-destination` (which needs dlt 1.28 /
   ibis 12) in the same environment. No API drift: the compiler handle
