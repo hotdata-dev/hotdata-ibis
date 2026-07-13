@@ -302,6 +302,75 @@ def test_to_pyarrow_batches_uses_arrow_result(httpserver: HTTPServer, srv: str):
     assert out.to_pydict() == {"x": [1, 2, 3]}
 
 
+def test_to_pyarrow_reshapes_multi_column_expression_result(httpserver: HTTPServer, srv: str):
+    """Exercise to_pyarrow's rename_columns/cast plumbing on a compiled, filtered,
+    projected, and limited expression -- not just a single-column con.sql(...)."""
+    httpserver.expect_request("/v1/information_schema").respond_with_json(
+        information_schema_response("customer", TPCH_SF1, TPCH_CUSTOMER_COLS, connection=TPCH_CONN)
+    )
+
+    captured: dict[str, str] = {}
+
+    def on_query(req: Request) -> Response:
+        captured["sql"] = req.get_json()["sql"]
+        return Response(
+            json.dumps(
+                {
+                    "query_run_id": "run1",
+                    "status": "queued",
+                    "status_url": "http://poll",
+                    "reason": None,
+                }
+            ),
+            status=202,
+            content_type="application/json",
+        )
+
+    httpserver.expect_request("/v1/query", method="POST").respond_with_handler(on_query)
+    httpserver.expect_request("/v1/query-runs/run1").respond_with_json(
+        {
+            "created_at": "2026-01-01T00:00:00Z",
+            "snapshot_id": "snap",
+            "sql_hash": "h",
+            "sql_text": "select",
+            "status": "succeeded",
+            "result_id": "res1",
+            "id": "run1",
+        }
+    )
+    # c_custkey comes back as int64, though the information schema (and so the
+    # compiled expression's expected schema) says INTEGER/int32 -- exercises
+    # to_pyarrow's .cast() step, not just column renaming.
+    httpserver.expect_request("/v1/results/res1").respond_with_data(
+        arrow_stream(
+            pa.table(
+                {
+                    "c_custkey": pa.array([1, 2], type=pa.int64()),
+                    "c_name": ["Alice", "Bob"],
+                }
+            )
+        ),
+        status=200,
+        content_type="application/vnd.apache.arrow.stream",
+    )
+
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+    customer = con.table("customer", database=(TPCH_CONN, TPCH_SF1))
+    expr = (
+        customer.filter(customer.c_mktsegment == "AUTOMOBILE")
+        .select("c_custkey", "c_name")
+        .limit(5)
+    )
+
+    out = con.to_pyarrow(expr)
+
+    assert out.column_names == ["c_custkey", "c_name"]
+    assert out["c_custkey"].type == pa.int32()  # cast down from the mocked int64
+    assert out.to_pydict() == {"c_custkey": [1, 2], "c_name": ["Alice", "Bob"]}
+    assert "AUTOMOBILE" in captured["sql"]
+    assert "LIMIT 5" in captured["sql"].upper()
+
+
 def test_create_table_from_pandas_uploads_managed_table(httpserver: HTTPServer, srv: str):
     uploaded: dict[str, pa.Table] = {}
 
