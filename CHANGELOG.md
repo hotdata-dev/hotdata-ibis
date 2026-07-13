@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING:** Managed-database operations are now id-addressed only.
+  `create_database` returns the created database's id (previously returned
+  `None`); `create_table`, `drop_table`, and `drop_database` all require that
+  id in place of the database's display name. Hotdata database names are not
+  unique, so the previous behavior — falling back to a `list_databases()`
+  scan by name whenever a name/id lookup 404'd — could silently resolve to
+  the wrong database on a name collision, risking a write or delete against
+  the wrong data. There is no longer a name-based fallback anywhere in the
+  managed-database path; callers must track the id `create_database` returns.
+  `create_database`'s `force` parameter is now a no-op (kept only for
+  interface compatibility with `ibis.backends.CanCreateDatabase`) since an
+  "already exists" check by name is no longer meaningful.
+
 ## [0.2.0] - 2026-07-10
 
 ### Changed

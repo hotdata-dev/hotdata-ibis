@@ -24,8 +24,10 @@ con = ibis.hotdata.connect(
     workspace_id="ws_...",
 )
 
-# 1. Create a database and declare the tables you'll load
-con.create_database("sales", tables=["orders"])
+# 1. Create a database and declare the tables you'll load.
+#    Hotdata database names are not unique — create_database returns the id
+#    you'll use for every subsequent operation on this database.
+database_id = con.create_database("sales", tables=["orders"])
 
 # 2. Upload a pandas DataFrame (or PyArrow table)
 df = pd.DataFrame({
@@ -33,7 +35,7 @@ df = pd.DataFrame({
     "amount": [9.99, 49.99, 5.00],
     "region": ["west", "east", "west"],
 })
-con.create_table("orders", df, database=("sales", "main"), overwrite=True)
+con.create_table("orders", df, database=(database_id, "main"), overwrite=True)
 
 # 3. Uploads are async — wait briefly before querying
 time.sleep(2)
@@ -49,8 +51,8 @@ result = (
 )
 
 # 5. Clean up
-con.drop_table("orders", database=("sales", "main"))
-con.drop_database("sales")
+con.drop_table("orders", database=(database_id, "main"))
+con.drop_database(database_id)
 ```
 
 ## Connect
@@ -89,23 +91,25 @@ Managed databases are the primary way to bring data into Hotdata with Ibis. Decl
 ### Create and load
 
 ```python
-# Declare the database and all table names up front
-con.create_database("analytics", tables=["events", "users"])
+# Declare the database and all table names up front.
+# Hotdata database names are not unique — create_database returns the id
+# you'll use for every subsequent operation on this database.
+database_id = con.create_database("analytics", tables=["events", "users"])
 
 # Upload from a pandas DataFrame
-con.create_table("events", events_df, database=("analytics", "main"), overwrite=True)
+con.create_table("events", events_df, database=(database_id, "main"), overwrite=True)
 
 # PyArrow tables also work
 import pyarrow as pa
 table = pa.table({"id": [1, 2], "name": ["alice", "bob"]})
-con.create_table("users", table, database=("analytics", "main"), overwrite=True)
+con.create_table("users", table, database=(database_id, "main"), overwrite=True)
 
 # Schema-only (no data): creates an empty table with the declared schema
 import ibis.expr.schema as sch
 con.create_table(
     "staging",
     schema=sch.Schema({"id": "int64", "ts": "timestamp"}),
-    database=("analytics", "main"),
+    database=(database_id, "main"),
 )
 ```
 
@@ -142,18 +146,19 @@ result = con.sql(
 Pass `force=True` to silently skip errors when the database or table does not exist:
 
 ```python
-con.drop_table("events", database=("analytics", "main"))
-con.drop_table("events", database=("analytics", "main"), force=True)  # no-op if missing
+con.drop_table("events", database=(database_id, "main"))
+con.drop_table("events", database=(database_id, "main"), force=True)  # no-op if missing
 
-con.drop_database("analytics")
-con.drop_database("analytics", force=True)  # no-op if missing
+con.drop_database(database_id)
+con.drop_database(database_id, force=True)  # no-op if missing
 ```
 
 ### Addressing summary
 
 | Operation | `database=` argument |
 |-----------|----------------------|
-| `create_table` / `drop_table` | `("your-database-name", schema)` |
+| `create_table` / `drop_table` | `(database_id, schema)` — the id returned by `create_database`, not its display name |
+| `drop_database` | the id returned by `create_database`, not its display name |
 | `con.table(...)` when querying | `("default", schema)` |
 
 ## Querying

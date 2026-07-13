@@ -502,15 +502,10 @@ def test_create_database_posts_managed_connection(httpserver: HTTPServer, srv: s
             content_type="application/json",
         )
 
-    # existence check: resolve "sales" by id → 404, then scan list → empty
-    httpserver.expect_request("/v1/databases/sales", method="GET").respond_with_data(
-        json.dumps({"detail": "not found"}), status=404, content_type="application/json"
-    )
-    httpserver.expect_request("/v1/databases", method="GET").respond_with_json({"databases": []})
     httpserver.expect_request("/v1/databases", method="POST").respond_with_handler(on_create)
 
     con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
-    con.create_database("sales", schema="public", tables=["orders"])
+    assert con.create_database("sales", schema="public", tables=["orders"]) == MANAGED_DB_ID
 
 
 def test_create_database_sends_no_schemas_when_no_tables(httpserver: HTTPServer, srv: str):
@@ -532,11 +527,6 @@ def test_create_database_sends_no_schemas_when_no_tables(httpserver: HTTPServer,
             content_type="application/json",
         )
 
-    # existence check: resolve "empty_db" by id → 404, then scan list → empty
-    httpserver.expect_request("/v1/databases/empty_db", method="GET").respond_with_data(
-        json.dumps({"detail": "not found"}), status=404, content_type="application/json"
-    )
-    httpserver.expect_request("/v1/databases", method="GET").respond_with_json({"databases": []})
     httpserver.expect_request("/v1/databases", method="POST").respond_with_handler(on_create)
 
     con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
@@ -573,7 +563,6 @@ def test_drop_table_raises_for_unknown_database(httpserver: HTTPServer, srv: str
     httpserver.expect_request(f"/v1/databases/{TPCH_CONN}").respond_with_data(
         json.dumps({"detail": "not found"}), status=404, content_type="application/json"
     )
-    httpserver.expect_request("/v1/databases", method="GET").respond_with_json({"databases": []})
 
     con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
 
@@ -586,20 +575,12 @@ def test_drop_table_force_ignores_unknown_database(httpserver: HTTPServer, srv: 
     httpserver.expect_request(f"/v1/databases/{TPCH_CONN}").respond_with_data(
         json.dumps({"detail": "not found"}), status=404, content_type="application/json"
     )
-    httpserver.expect_request("/v1/databases", method="GET").respond_with_json({"databases": []})
 
     con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
     con.drop_table("demo", database=(TPCH_CONN, PUBLIC), force=True)
 
 
 def test_drop_database_deletes_managed_database(httpserver: HTTPServer, srv: str):
-    # resolve "sales" by description: id lookup 404, scan list, then get detail
-    httpserver.expect_request(f"/v1/databases/{MANAGED_NAME}", method="GET").respond_with_data(
-        json.dumps({"detail": "not found"}), status=404, content_type="application/json"
-    )
-    httpserver.expect_request("/v1/databases", method="GET").respond_with_json(
-        managed_databases_response()
-    )
     httpserver.expect_request(f"/v1/databases/{MANAGED_DB_ID}", method="GET").respond_with_json(
         managed_database_detail_response()
     )
@@ -608,28 +589,16 @@ def test_drop_database_deletes_managed_database(httpserver: HTTPServer, srv: str
     )
 
     con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
-    con.drop_database(MANAGED_NAME)
+    con.drop_database(MANAGED_DB_ID)
 
 
-def test_drop_database_force_ignores_unknown_connection(httpserver: HTTPServer, srv: str):
+def test_drop_database_force_ignores_unknown_id(httpserver: HTTPServer, srv: str):
     httpserver.expect_request("/v1/databases/missing", method="GET").respond_with_data(
         json.dumps({"detail": "not found"}), status=404, content_type="application/json"
     )
-    httpserver.expect_request("/v1/databases", method="GET").respond_with_json({"databases": []})
 
     con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
     con.drop_database("missing", force=True)
-
-
-def test_drop_database_force_ignores_unrecognized_name(httpserver: HTTPServer, srv: str):
-    # force=True silently ignores names not found in the databases API
-    httpserver.expect_request("/v1/databases/TPC-H", method="GET").respond_with_data(
-        json.dumps({"detail": "not found"}), status=404, content_type="application/json"
-    )
-    httpserver.expect_request("/v1/databases", method="GET").respond_with_json({"databases": []})
-
-    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
-    con.drop_database("TPC-H", force=True)
 
 
 def test_compile_scalar_no_roundtrip(httpserver: HTTPServer, srv: str):
