@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+## [0.3.1] - 2026-07-15
+
 ### Changed
 
 - Raise the minimum `hotdata` SDK version to `>=0.7,<0.8` (was `>=0.6,<0.7`), to
