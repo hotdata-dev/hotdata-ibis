@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Raise the minimum `hotdata` SDK version to `>=0.7,<0.8` (was `>=0.6,<0.7`), to
+  track its current minor per this project's SDK-pinning convention. 0.7.0 is
+  purely additive for the surface this backend uses (an unused optional `key`
+  field on table declarations; `LoadManagedTableRequest.upload_id` widened from
+  required to optional). Verified via the full offline test suite run directly
+  against `hotdata==0.7.0`. This also unblocks co-installing `hotdata-ibis`
+  alongside `hotdata-dlt-destination` once it raises its own `hotdata` floor to
+  0.7.
 
 ## [0.3.0] - 2026-07-13
 

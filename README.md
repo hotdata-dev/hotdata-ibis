@@ -2,7 +2,7 @@
 
 Use [Ibis](https://ibis-project.org/) to create on-demand databases, upload data, and query with Python expressions — get pandas or Arrow results back without writing SQL.
 
-**Requirements:** Python 3.10+, **ibis-framework** ≥12,<13, **hotdata** ≥0.6,<0.7.
+**Requirements:** Python 3.10+, **ibis-framework** ≥12,<13, **hotdata** ≥0.7,<0.8.
 
 ## Install
 
