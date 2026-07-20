@@ -50,6 +50,7 @@ def managed_databases_response() -> dict:
                 "id": MANAGED_DB_ID,
                 "name": MANAGED_NAME,
                 "default_catalog": MANAGED_CATALOG,
+                "default_schema": "main",
             }
         ]
     }
@@ -60,6 +61,7 @@ def managed_database_detail_response() -> dict:
         "id": MANAGED_DB_ID,
         "name": MANAGED_NAME,
         "default_catalog": MANAGED_CATALOG,
+        "default_schema": "main",
         "default_connection_id": MANAGED_CONN,
         "expires_at": None,
         "attachments": [],
@@ -563,6 +565,7 @@ def test_create_database_posts_managed_connection(httpserver: HTTPServer, srv: s
                     "id": MANAGED_DB_ID,
                     "name": "sales",
                     "default_catalog": MANAGED_CATALOG,
+                    "default_schema": "main",
                     "default_connection_id": MANAGED_CONN,
                     "expires_at": None,
                 }
@@ -588,6 +591,7 @@ def test_create_database_sends_no_schemas_when_no_tables(httpserver: HTTPServer,
                     "id": MANAGED_DB_ID,
                     "name": "empty_db",
                     "default_catalog": MANAGED_CATALOG,
+                    "default_schema": "main",
                     "default_connection_id": MANAGED_CONN,
                     "expires_at": None,
                 }

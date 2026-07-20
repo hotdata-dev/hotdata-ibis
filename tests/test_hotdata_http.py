@@ -291,6 +291,7 @@ def test_create_managed_database(httpserver: HTTPServer):
                     "id": "db_sales",
                     "name": "sales",
                     "default_catalog": "default",
+                    "default_schema": "main",
                     "default_connection_id": "conn_sales",
                     "expires_at": None,
                 }
