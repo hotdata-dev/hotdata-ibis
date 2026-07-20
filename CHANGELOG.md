@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 
+## [0.3.2] - 2026-07-20
+
+### Changed
+
+- Widen the `hotdata` SDK pin to `>=0.7,<0.9` (was `<0.8`) so the backend can
+  run alongside `hotdata 0.8.0` (the per-load-key release). 0.8.0 is additive —
+  every symbol this backend imports resolves unchanged — so no code changes.
+
+
 ## [0.3.1] - 2026-07-15
 
 ### Changed
