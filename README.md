@@ -191,6 +191,48 @@ result = base.filter(base.amount > 10).execute()
 
 You can chain Ibis expressions on the result of `con.sql(...)`.
 
+## Vector search
+
+`ibis_hotdata.vector` provides helpers for querying HNSW-indexed vector (embedding)
+columns:
+
+```python
+from ibis_hotdata.vector import semantic_search, l2_distance
+
+t = con.table("docs", database=("default", "main"))
+
+result = semantic_search(t, "embedding", query_vector, k=10).execute()
+
+# or with a different metric
+result = semantic_search(t, "embedding", query_vector, k=10, distance_fn=l2_distance).execute()
+```
+
+`semantic_search` compiles to `ORDER BY <distance>(col, ARRAY[...]) ASC LIMIT k` with the
+vector column excluded from the output — the SQL shape Hotdata's query engine requires to
+route the query through its HNSW index instead of a brute-force scan.
+
+Creating the HNSW index itself isn't wrapped by this package yet — use the `hotdata` SDK
+directly:
+
+```python
+from hotdata import ApiClient, Configuration
+from hotdata.api.indexes_api import IndexesApi
+from hotdata.models.create_index_request import CreateIndexRequest
+
+api = IndexesApi(ApiClient(Configuration(...)))
+api.create_index(
+    connection_id=connection_id,
+    var_schema="main",
+    table="docs",
+    create_index_request=CreateIndexRequest(
+        index_name="docs_embedding_idx",
+        index_type="vector",
+        columns=["embedding"],
+        metric="cosine",
+    ),
+)
+```
+
 ## Connecting to existing sources
 
 If you have existing databases or warehouses connected to your Hotdata workspace (Postgres, Snowflake, BigQuery, etc.), you can query them through the same Ibis connection:
@@ -228,6 +270,7 @@ con.list_tables(database=("my_postgres", "public"))    # tables
 | `.execute()` → pandas, `.to_pyarrow()`, `.to_pyarrow_batches()` | ✅ |
 | `list_catalogs`, `list_databases`, `list_tables` | ✅ |
 | Arrow / Parquet column types (timestamp, decimal, list, duration, …) | ✅ |
+| Vector search (`ibis_hotdata.vector.semantic_search`) | ✅ |
 | Temporary tables | ❌ |
 | In-memory tables (`ibis.memtable(...)`) | ❌ |
 | Python UDFs | ❌ |
