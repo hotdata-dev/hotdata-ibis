@@ -14,6 +14,7 @@ import pytest
 from werkzeug.wrappers import Request, Response
 
 pytest.importorskip("pytest_httpserver")
+from conftest import mock_presigned_upload_flow
 from pytest_httpserver import HTTPServer
 
 # Managed database identifiers for mocked Hotdata (SQL shape ``sales.public.orders``).
@@ -106,25 +107,7 @@ def mock_managed_create_table_flow(
         managed_database_detail_response()
     )
 
-    def default_upload(req: Request) -> Response:
-        assert req.headers["Content-Type"] == "application/parquet"
-        return Response(
-            json.dumps(
-                {
-                    "id": "upl_1",
-                    "status": "ready",
-                    "size_bytes": len(req.get_data()),
-                    "created_at": "2026-01-01T00:00:00Z",
-                    "content_type": "application/parquet",
-                }
-            ),
-            status=201,
-            content_type="application/json",
-        )
-
-    httpserver.expect_request("/v1/files", method="POST").respond_with_handler(
-        on_upload or default_upload
-    )
+    mock_presigned_upload_flow(httpserver, upload_id="upl_1", on_storage_put=on_upload)
 
     def on_load(req: Request) -> Response:
         body = req.get_json()
@@ -378,19 +361,7 @@ def test_create_table_from_pandas_uploads_managed_table(httpserver: HTTPServer, 
 
     def on_upload(req: Request) -> Response:
         uploaded["table"] = pq.read_table(io.BytesIO(req.get_data()))
-        return Response(
-            json.dumps(
-                {
-                    "id": "upl_1",
-                    "status": "ready",
-                    "size_bytes": len(req.get_data()),
-                    "created_at": "2026-01-01T00:00:00Z",
-                    "content_type": "application/parquet",
-                }
-            ),
-            status=201,
-            content_type="application/json",
-        )
+        return Response(b"", status=200)
 
     mock_managed_create_table_flow(
         httpserver,
@@ -421,19 +392,7 @@ def test_create_table_from_pyarrow_uploads_managed_table(httpserver: HTTPServer,
 
     def on_upload(req: Request) -> Response:
         uploaded["table"] = pq.read_table(io.BytesIO(req.get_data()))
-        return Response(
-            json.dumps(
-                {
-                    "id": "upl_1",
-                    "status": "ready",
-                    "size_bytes": len(req.get_data()),
-                    "created_at": "2026-01-01T00:00:00Z",
-                    "content_type": "application/parquet",
-                }
-            ),
-            status=201,
-            content_type="application/json",
-        )
+        return Response(b"", status=200)
 
     mock_managed_create_table_flow(
         httpserver,
@@ -461,19 +420,7 @@ def test_create_table_schema_only_uploads_empty_parquet(httpserver: HTTPServer, 
 
     def on_upload(req: Request) -> Response:
         uploaded["table"] = pq.read_table(io.BytesIO(req.get_data()))
-        return Response(
-            json.dumps(
-                {
-                    "id": "upl_1",
-                    "status": "ready",
-                    "size_bytes": len(req.get_data()),
-                    "created_at": "2026-01-01T00:00:00Z",
-                    "content_type": "application/parquet",
-                }
-            ),
-            status=201,
-            content_type="application/json",
-        )
+        return Response(b"", status=200)
 
     mock_managed_create_table_flow(
         httpserver,
