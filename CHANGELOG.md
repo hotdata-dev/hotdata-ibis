@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   removed `POST /v1/files` endpoint (`runtimedb` #952). `upload_file`'s return
   value now carries `upload_id` (was `id`) to match the new
   `FinalizeUploadResponse` shape.
+
 ### Added
 
 - `ibis_hotdata.vector`: `cosine_distance`, `l2_distance`, `negative_dot_product`
