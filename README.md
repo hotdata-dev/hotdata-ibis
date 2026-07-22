@@ -2,7 +2,7 @@
 
 Use [Ibis](https://ibis-project.org/) to create on-demand databases, upload data, and query with Python expressions — get pandas or Arrow results back without writing SQL.
 
-**Requirements:** Python 3.10+, **ibis-framework** ≥12,<13, **hotdata** ≥0.7,<0.8.
+**Requirements:** Python 3.10+, **ibis-framework** ≥12,<13, **hotdata** ≥0.7,<0.9.
 
 ## Install
 
@@ -283,10 +283,10 @@ SQL compilation uses Ibis's Postgres dialect. Column types returned by Hotdata's
 ```bash
 uv sync   # installs dev group (pytest, ruff, httpx)
 uv run pytest
-uv run ruff check src tests
+uv run ruff check src tests examples
 ```
 
-CI: `uv sync --locked && uv run pytest`.
+CI: `uv sync --all-groups && uv run pytest -v`.
 
 ## Examples
 
@@ -300,6 +300,7 @@ uv run python examples/02_execute_sql.py 'SELECT COUNT(*) AS n FROM tpch.tpch_sf
 uv run python examples/03_connect_via_url.py
 uv run python examples/04_ibis_table_workflows.py
 uv run python examples/05_roundtrip_demo.py
+uv run python examples/06_semantic_search.py
 ```
 
 ## References
