@@ -557,7 +557,8 @@ class Backend(
         )
 
     def upload_file(self, data: bytes, *, content_type: str | None = None) -> dict[str, Any]:
-        """POST ``/v1/files``; returns the upload record (use ``id`` with managed table loads)."""
+        """Direct-to-storage presigned upload; returns the finalized upload record
+        (use ``upload_id`` with managed table loads)."""
         try:
             return self._http.upload_file(data, content_type=content_type)
         except HotdataAPIError as exc:
@@ -695,7 +696,7 @@ class Backend(
                 connection_id,
                 schema_name,
                 name,
-                upload_id=upload["id"],
+                upload_id=upload["upload_id"],
             )
         except HotdataAPIError as exc:
             raise _ibis_err_from_hotdata(exc) from exc

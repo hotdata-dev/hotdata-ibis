@@ -6,6 +6,7 @@ import json
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
+from conftest import mock_presigned_upload_flow
 from pytest_httpserver import HTTPServer
 from werkzeug.wrappers import Request, Response
 
@@ -229,19 +230,7 @@ def test_list_connections_raises_on_http_error(httpserver: HTTPServer):
 
 
 def test_upload_file_then_load_managed_table(httpserver: HTTPServer):
-    httpserver.expect_oneshot_request(
-        "/v1/files",
-        method="POST",
-    ).respond_with_json(
-        {
-            "id": "upl_1",
-            "status": "ready",
-            "size_bytes": 3,
-            "created_at": "2026-01-01T00:00:00Z",
-            "content_type": "application/parquet",
-        },
-        status=201,
-    )
+    mock_presigned_upload_flow(httpserver, upload_id="upl_1")
 
     def on_load(req: Request) -> Response:
         body = req.get_json()
@@ -267,12 +256,12 @@ def test_upload_file_then_load_managed_table(httpserver: HTTPServer):
         verify_ssl=False,
     )
     up = client.upload_file(b"parquet", content_type="application/parquet")
-    assert up["id"] == "upl_1"
+    assert up["upload_id"] == "upl_1"
     loaded = client.load_managed_table(
         "conn_sales",
         "public",
         "demo_tbl",
-        upload_id=up["id"],
+        upload_id=up["upload_id"],
     )
     assert loaded["table_name"] == "demo_tbl"
     client.close()
@@ -338,23 +327,23 @@ def test_delete_managed_table_and_database(httpserver: HTTPServer):
 
 
 def test_upload_file_accepts_content_type(httpserver: HTTPServer):
-    def on_upload(req: Request) -> Response:
-        assert req.headers["Content-Type"] == "application/parquet"
+    def on_create_session(req: Request) -> Response:
+        assert req.get_json()["content_type"] == "application/parquet"
         return Response(
             json.dumps(
                 {
-                    "id": "upl_1",
-                    "status": "ready",
-                    "size_bytes": len(req.get_data()),
-                    "created_at": "2026-01-01T00:00:00Z",
-                    "content_type": "application/parquet",
+                    "mode": "single",
+                    "url": httpserver.url_for("/mock-storage/upl_1"),
+                    "headers": {},
+                    "upload_id": "upl_1",
+                    "finalize_token": "tok_1",
                 }
             ),
             status=201,
             content_type="application/json",
         )
 
-    httpserver.expect_oneshot_request("/v1/files", method="POST").respond_with_handler(on_upload)
+    mock_presigned_upload_flow(httpserver, upload_id="upl_1", on_create_session=on_create_session)
 
     client = HotdataClient(
         api_url=httpserver.url_for("/").rstrip("/"),
@@ -363,5 +352,5 @@ def test_upload_file_accepts_content_type(httpserver: HTTPServer):
         verify_ssl=False,
     )
     out = client.upload_file(b"parquet", content_type="application/parquet")
-    assert out["id"] == "upl_1"
+    assert out["upload_id"] == "upl_1"
     client.close()

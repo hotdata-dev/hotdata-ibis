@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `create_table` (and thus `upload_file`) now uses the `hotdata` SDK's presigned
+  direct-to-storage upload flow (`hotdata.uploads.UploadsApi`) instead of the
+  removed `POST /v1/files` endpoint (`runtimedb` #952). `upload_file`'s return
+  value now carries `upload_id` (was `id`) to match the new
+  `FinalizeUploadResponse` shape.
+
 ### Added
 
 - `ibis_hotdata.vector`: `cosine_distance`, `l2_distance`, `negative_dot_product`

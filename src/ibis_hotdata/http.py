@@ -19,7 +19,6 @@ from hotdata.api import (
     QueryApi,
     QueryRunsApi,
     ResultsApi,
-    UploadsApi,
 )
 from hotdata.api.databases_api import DatabasesApi
 from hotdata.exceptions import ApiException
@@ -29,6 +28,7 @@ from hotdata.models.create_database_request import CreateDatabaseRequest
 from hotdata.models.database_default_schema_decl import DatabaseDefaultSchemaDecl
 from hotdata.models.database_default_table_decl import DatabaseDefaultTableDecl
 from hotdata.models.load_managed_table_request import LoadManagedTableRequest
+from hotdata.uploads import UploadError, UploadsApi
 
 T = TypeVar("T")
 
@@ -62,6 +62,13 @@ def _from_api_exception(exc: ApiException) -> HotdataAPIError:
     if body:
         msg = f"{msg} {body}"
     return HotdataAPIError(msg.strip(), status_code=exc.status, body=exc.body)
+
+
+def _from_upload_error(exc: UploadError) -> HotdataAPIError:
+    """Map the presigned-upload flow's ``UploadError`` (session/storage/finalize
+    failures) onto our own error type, same shape as ``_from_api_exception``.
+    """
+    return HotdataAPIError(f"Hotdata upload error: {exc}", status_code=getattr(exc, "status", None))
 
 
 def _ipc_stream_bytes_to_table(data: bytes) -> pa.Table:
@@ -185,10 +192,19 @@ class HotdataClient:
         raise HotdataAPIError("Unexpected query response type")
 
     def upload_file(self, data: bytes, *, content_type: str | None = None) -> dict[str, Any]:
-        kwargs: dict[str, Any] = {}
-        if content_type is not None:
-            kwargs["_content_type"] = content_type
-        resp = self._safe_call(self._uploads.upload_file, data, **kwargs)
+        """Direct-to-storage presigned upload: create session, ``PUT``, finalize.
+
+        Returns the finalized upload record (``upload_id`` is what managed-table
+        loads need) -- see ``hotdata.uploads.UploadsApi.upload_file``.
+        """
+        try:
+            resp = self._uploads.upload_file(
+                data, content_type=content_type, request_timeout=self._timeout
+            )
+        except UploadError as exc:
+            raise _from_upload_error(exc) from exc
+        except ApiException as exc:
+            raise _from_api_exception(exc) from exc
         return resp.model_dump(by_alias=True, mode="json")
 
     def list_databases(self) -> dict[str, Any]:
