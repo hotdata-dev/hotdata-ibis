@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `ibis_hotdata.vector`: `cosine_distance`, `l2_distance`, `negative_dot_product`
+  builtin-UDF helpers and a `semantic_search(table, column, query_vector, k, ...)`
+  query builder, for querying HNSW-indexed vector columns. Compiles to
+  `ORDER BY <distance>(col, ARRAY[...]) ASC LIMIT k` with the vector column excluded
+  from the output, which is the SQL shape the engine's index-selection rule requires.
 
 ## [0.3.2] - 2026-07-20
 
