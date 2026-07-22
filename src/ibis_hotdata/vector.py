@@ -41,6 +41,9 @@ def semantic_search(
 
     Excludes `column` from the result and orders ascending by
     `distance_fn(column, query_vector)`, aliased as `distance_name`.
+
+    `distance_name` must not collide with an existing column name in `table`,
+    or `select` raises a duplicate-column error.
     """
     col = table[column] if isinstance(column, str) else column
     other_cols = [name for name in table.columns if name != col.get_name()]
