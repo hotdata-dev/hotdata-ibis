@@ -165,12 +165,6 @@ def parser(description: str) -> argparse.ArgumentParser:
         help="Workspace public id (env HOTDATA_WORKSPACE)",
     )
     p.add_argument(
-        "--session",
-        dest="session_id",
-        default=os.environ.get("HOTDATA_SESSION_ID") or None,
-        help="Sandbox id for X-Session-Id (env HOTDATA_SESSION_ID, optional)",
-    )
-    p.add_argument(
         "--insecure",
         action="store_true",
         help="Disable TLS verification (dev only)",
@@ -209,8 +203,6 @@ def connect_kwargs(ns: argparse.Namespace, **extras) -> dict:
         "timeout": ns.timeout,
         "verify_ssl": not getattr(ns, "insecure", False),
     }
-    if ns.session_id:
-        kwargs["session_id"] = ns.session_id
     if dc:
         kwargs["default_connection"] = dc
     if ds:
@@ -237,8 +229,6 @@ def hotdata_connect_uri(ns: argparse.Namespace) -> str:
         "workspace_id": ns.workspace_id.strip(),
         "verify_ssl": "true" if verify_ssl else "false",
     }
-    if ns.session_id:
-        qs["session_id"] = ns.session_id
     dc = getattr(ns, "default_connection", None)
     ds = getattr(ns, "default_schema", None)
     if dc:

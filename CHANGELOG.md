@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **Breaking:** session/sandbox support is gone. `ibis.hotdata.connect()` and the
+  `hotdata://` URL no longer accept `session_id`, the `--session` example flag and
+  its `HOTDATA_SESSION_ID` env var are removed, and no `X-Session-Id` header is
+  sent.
+
+  Forced by the SDK: `hotdata` 0.9.0 removes the `SessionId` security scheme, so
+  `Configuration(session_id=...)` raises `TypeError` rather than being ignored —
+  this backend passed it unconditionally, so every connection would have failed.
+  The server stopped enforcing session scoping before that release, so requests
+  behave the same without it.
+
+  Drop `session_id=` from `connect()` calls and from `hotdata://` query strings.
+
+### Changed
+
+- Require `hotdata>=0.9.0,<0.10` (was `>=0.7,<0.9`). This package's cap was the
+  reason `hotdata-dlt-destination` could not adopt `hotdata` 0.9 or
+  `hotdata-framework` 0.12, which in turn blocked their consumers.
+
+  Test fixtures gained `partition_by` / `sorted_by` on every `TableInfo` dict:
+  0.9.0 makes both required, so a listing response omitting them fails validation
+  for the whole call rather than that field. The API always sends them.
+
 
 ## [0.4.0] - 2026-07-22
 

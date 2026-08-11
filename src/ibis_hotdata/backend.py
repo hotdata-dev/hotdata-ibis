@@ -82,8 +82,8 @@ class Backend(
         """Connect using ``hotdata://host`` or ``hotdata://host/path`` URLs.
 
         * Base URL defaults to ``https://{host}`` plus optional leading ``path``.
-        * Query string may include ``token``, ``workspace_id``, ``session_id``,
-          ``timeout``, ``verify_ssl`` (``true`` / ``false``), ``default_connection``,
+        * Query string may include ``token``, ``workspace_id``, ``timeout``,
+          ``verify_ssl`` (``true`` / ``false``), ``default_connection``,
           ``default_schema``, ``poll_interval_s``, ``poll_timeout_s``.
         * If ``token`` is omitted, ``urlparse`` password (`user:TOKEN@`) is accepted.
         """
@@ -115,7 +115,6 @@ class Backend(
             "api_url": api_url,
             "token": token,
             "workspace_id": workspace_id,
-            "session_id": q.pop("session_id", None),
             "timeout": timeout,
             "verify_ssl": verify_ssl,
             "default_connection": q.pop("default_connection", None),
@@ -138,7 +137,6 @@ class Backend(
         api_url: str,
         token: str,
         workspace_id: str,
-        session_id: str | None = None,
         timeout: float = 120.0,
         verify_ssl: bool | str = True,
         default_connection: str | None = None,
@@ -160,8 +158,6 @@ class Backend(
             API bearer token (``Authorization`` header).
         workspace_id
             Workspace public id (``X-Workspace-Id`` header).
-        session_id
-            Optional sandbox id (``X-Session-Id`` header).
         timeout
             HTTP timeout in seconds (per request).
         verify_ssl
@@ -196,7 +192,6 @@ class Backend(
             api_url=api_url,
             token=token,
             workspace_id=workspace_id,
-            session_id=session_id,
             timeout=timeout,
             verify_ssl=verify_ssl,
         )

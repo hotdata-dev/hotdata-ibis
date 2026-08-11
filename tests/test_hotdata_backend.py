@@ -86,6 +86,10 @@ def information_schema_response(
                 "connection": connection,
                 "schema": schema_name,
                 "table": table_name,
+                # Required on TableInfo since hotdata 0.9.0; the API always sends
+                # them, and an omission fails validation for the whole listing.
+                "partition_by": [],
+                "sorted_by": [],
                 "synced": True,
                 "last_sync": None,
                 "columns": columns,
@@ -650,6 +654,10 @@ def test_information_schema_discovery(httpserver: HTTPServer, srv: str):
                 "connection": TPCH_CONN,
                 "schema": TPCH_SF1,
                 "table": "customer",
+                # Required on TableInfo since hotdata 0.9.0; the API always sends
+                # them, and an omission fails validation for the whole listing.
+                "partition_by": [],
+                "sorted_by": [],
                 "synced": True,
                 "last_sync": None,
                 "columns": TPCH_CUSTOMER_COLS,
@@ -676,6 +684,10 @@ def test_information_schema_pagination_merges_pages(httpserver: HTTPServer, srv:
             "connection": TPCH_CONN,
             "schema": TPCH_SF1,
             "table": "customer",
+            # Required on TableInfo since hotdata 0.9.0; the API always sends
+            # them, and an omission fails validation for the whole listing.
+            "partition_by": [],
+            "sorted_by": [],
             "synced": True,
             "columns": None,
         },
@@ -685,6 +697,10 @@ def test_information_schema_pagination_merges_pages(httpserver: HTTPServer, srv:
             "connection": TPCH_CONN,
             "schema": TPCH_SF1,
             "table": "lineitem",
+            # Required on TableInfo since hotdata 0.9.0; the API always sends
+            # them, and an omission fails validation for the whole listing.
+            "partition_by": [],
+            "sorted_by": [],
             "synced": True,
             "columns": None,
         },
@@ -750,6 +766,10 @@ def test_list_tables_regex_like(httpserver: HTTPServer, srv: str):
             "connection": TPCH_CONN,
             "schema": TPCH_SF1,
             "table": "customer",
+            # Required on TableInfo since hotdata 0.9.0; the API always sends
+            # them, and an omission fails validation for the whole listing.
+            "partition_by": [],
+            "sorted_by": [],
             "synced": True,
             "columns": None,
         },
@@ -757,6 +777,10 @@ def test_list_tables_regex_like(httpserver: HTTPServer, srv: str):
             "connection": TPCH_CONN,
             "schema": TPCH_SF1,
             "table": "lineitem",
+            # Required on TableInfo since hotdata 0.9.0; the API always sends
+            # them, and an omission fails validation for the whole listing.
+            "partition_by": [],
+            "sorted_by": [],
             "synced": True,
             "columns": None,
         },
@@ -764,6 +788,10 @@ def test_list_tables_regex_like(httpserver: HTTPServer, srv: str):
             "connection": TPCH_CONN,
             "schema": TPCH_SF1,
             "table": "nation",
+            # Required on TableInfo since hotdata 0.9.0; the API always sends
+            # them, and an omission fails validation for the whole listing.
+            "partition_by": [],
+            "sorted_by": [],
             "synced": True,
             "columns": None,
         },
@@ -799,7 +827,14 @@ def test_ambiguous_default_connection(httpserver: HTTPServer, srv: str):
         _ = con.current_catalog
 
 
-def test_x_session_header_on_query(httpserver: HTTPServer, srv: str):
+def test_no_session_header_on_query(httpserver: HTTPServer, srv: str):
+    """The inverse of what this asserted before: no X-Session-Id on the wire.
+
+    Asserted at the HTTP layer rather than on the signature, because that is the
+    only place a revival shows up. Reading the value from the environment and
+    passing it into Configuration would restore the header with no signature
+    change at all, and every other check here would still pass.
+    """
     seen: list[str | None] = []
 
     def on_post(req: Request) -> Response:
@@ -839,7 +874,6 @@ def test_x_session_header_on_query(httpserver: HTTPServer, srv: str):
         api_url=srv,
         token="tok",
         workspace_id="ws",
-        session_id="sb_xyz",
         verify_ssl=False,
         default_connection=TPCH_CONN,
         default_schema=TPCH_SF1,
@@ -848,4 +882,10 @@ def test_x_session_header_on_query(httpserver: HTTPServer, srv: str):
     pdf = con.execute(ibis.literal(0).name("n"))
     assert pdf == 0
     assert len(seen) >= 1
-    assert all(h == "sb_xyz" for h in seen)
+    assert all(h is None for h in seen), f"X-Session-Id was sent: {seen}"
+
+    # And the argument that produced it is gone from the public signature.
+    with pytest.raises(TypeError, match="session_id"):
+        ibis.hotdata.connect(
+            api_url=srv, token="tok", workspace_id="ws", session_id="sb_xyz"
+        )
