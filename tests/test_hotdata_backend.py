@@ -37,6 +37,14 @@ TPCH_CUSTOMER_COLS = [
 ]
 
 
+# TableInfo requires these from hotdata 0.9.0 on. The API always sends them, and
+# an omission fails validation for the WHOLE information_schema call rather than
+# for that field — nine tests here failed exactly that way before it was added.
+# Spread into each fixture rather than repeated, so the next required field is a
+# one-line change here.
+_REQUIRED_TABLE_FIELDS = {"partition_by": [], "sorted_by": []}
+
+
 def arrow_stream(table: pa.Table) -> bytes:
     sink = io.BytesIO()
     with ipc.new_stream(sink, table.schema) as writer:
@@ -86,10 +94,7 @@ def information_schema_response(
                 "connection": connection,
                 "schema": schema_name,
                 "table": table_name,
-                # Required on TableInfo since hotdata 0.9.0; the API always sends
-                # them, and an omission fails validation for the whole listing.
-                "partition_by": [],
-                "sorted_by": [],
+                **_REQUIRED_TABLE_FIELDS,
                 "synced": True,
                 "last_sync": None,
                 "columns": columns,
@@ -654,10 +659,7 @@ def test_information_schema_discovery(httpserver: HTTPServer, srv: str):
                 "connection": TPCH_CONN,
                 "schema": TPCH_SF1,
                 "table": "customer",
-                # Required on TableInfo since hotdata 0.9.0; the API always sends
-                # them, and an omission fails validation for the whole listing.
-                "partition_by": [],
-                "sorted_by": [],
+                **_REQUIRED_TABLE_FIELDS,
                 "synced": True,
                 "last_sync": None,
                 "columns": TPCH_CUSTOMER_COLS,
@@ -684,10 +686,7 @@ def test_information_schema_pagination_merges_pages(httpserver: HTTPServer, srv:
             "connection": TPCH_CONN,
             "schema": TPCH_SF1,
             "table": "customer",
-            # Required on TableInfo since hotdata 0.9.0; the API always sends
-            # them, and an omission fails validation for the whole listing.
-            "partition_by": [],
-            "sorted_by": [],
+            **_REQUIRED_TABLE_FIELDS,
             "synced": True,
             "columns": None,
         },
@@ -697,10 +696,7 @@ def test_information_schema_pagination_merges_pages(httpserver: HTTPServer, srv:
             "connection": TPCH_CONN,
             "schema": TPCH_SF1,
             "table": "lineitem",
-            # Required on TableInfo since hotdata 0.9.0; the API always sends
-            # them, and an omission fails validation for the whole listing.
-            "partition_by": [],
-            "sorted_by": [],
+            **_REQUIRED_TABLE_FIELDS,
             "synced": True,
             "columns": None,
         },
@@ -766,10 +762,7 @@ def test_list_tables_regex_like(httpserver: HTTPServer, srv: str):
             "connection": TPCH_CONN,
             "schema": TPCH_SF1,
             "table": "customer",
-            # Required on TableInfo since hotdata 0.9.0; the API always sends
-            # them, and an omission fails validation for the whole listing.
-            "partition_by": [],
-            "sorted_by": [],
+            **_REQUIRED_TABLE_FIELDS,
             "synced": True,
             "columns": None,
         },
@@ -777,10 +770,7 @@ def test_list_tables_regex_like(httpserver: HTTPServer, srv: str):
             "connection": TPCH_CONN,
             "schema": TPCH_SF1,
             "table": "lineitem",
-            # Required on TableInfo since hotdata 0.9.0; the API always sends
-            # them, and an omission fails validation for the whole listing.
-            "partition_by": [],
-            "sorted_by": [],
+            **_REQUIRED_TABLE_FIELDS,
             "synced": True,
             "columns": None,
         },
@@ -788,10 +778,7 @@ def test_list_tables_regex_like(httpserver: HTTPServer, srv: str):
             "connection": TPCH_CONN,
             "schema": TPCH_SF1,
             "table": "nation",
-            # Required on TableInfo since hotdata 0.9.0; the API always sends
-            # them, and an omission fails validation for the whole listing.
-            "partition_by": [],
-            "sorted_by": [],
+            **_REQUIRED_TABLE_FIELDS,
             "synced": True,
             "columns": None,
         },

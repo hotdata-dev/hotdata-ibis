@@ -9,10 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
-- **Breaking:** session/sandbox support is gone. `ibis.hotdata.connect()` and the
-  `hotdata://` URL no longer accept `session_id`, the `--session` example flag and
-  its `HOTDATA_SESSION_ID` env var are removed, and no `X-Session-Id` header is
-  sent.
+- **Breaking:** session/sandbox support is gone. `ibis.hotdata.connect()` no
+  longer accepts `session_id` — passing it raises `TypeError` — the `--session`
+  example flag and its `HOTDATA_SESSION_ID` env var are removed, and no
+  `X-Session-Id` header is sent.
+
+  The two surfaces differ, deliberately: `session_id` in a `hotdata://` URL is
+  **ignored rather than rejected**, because `_from_url` builds its arguments from
+  named lookups and discards the rest, as it does for any unrecognised query
+  parameter. So an existing URL keeps connecting, minus the header. Only the
+  keyword argument errors.
 
   Forced by the SDK: `hotdata` 0.9.0 removes the `SessionId` security scheme, so
   `Configuration(session_id=...)` raises `TypeError` rather than being ignored —
