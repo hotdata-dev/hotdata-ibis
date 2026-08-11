@@ -37,6 +37,14 @@ TPCH_CUSTOMER_COLS = [
 ]
 
 
+# TableInfo requires these from hotdata 0.9.0 on. The API always sends them, and
+# an omission fails validation for the WHOLE information_schema call rather than
+# for that field — nine tests here failed exactly that way before it was added.
+# Spread into each fixture rather than repeated, so the next required field is a
+# one-line change here.
+_REQUIRED_TABLE_FIELDS = {"partition_by": [], "sorted_by": []}
+
+
 def arrow_stream(table: pa.Table) -> bytes:
     sink = io.BytesIO()
     with ipc.new_stream(sink, table.schema) as writer:
@@ -86,6 +94,7 @@ def information_schema_response(
                 "connection": connection,
                 "schema": schema_name,
                 "table": table_name,
+                **_REQUIRED_TABLE_FIELDS,
                 "synced": True,
                 "last_sync": None,
                 "columns": columns,
@@ -650,6 +659,7 @@ def test_information_schema_discovery(httpserver: HTTPServer, srv: str):
                 "connection": TPCH_CONN,
                 "schema": TPCH_SF1,
                 "table": "customer",
+                **_REQUIRED_TABLE_FIELDS,
                 "synced": True,
                 "last_sync": None,
                 "columns": TPCH_CUSTOMER_COLS,
@@ -676,6 +686,7 @@ def test_information_schema_pagination_merges_pages(httpserver: HTTPServer, srv:
             "connection": TPCH_CONN,
             "schema": TPCH_SF1,
             "table": "customer",
+            **_REQUIRED_TABLE_FIELDS,
             "synced": True,
             "columns": None,
         },
@@ -685,6 +696,7 @@ def test_information_schema_pagination_merges_pages(httpserver: HTTPServer, srv:
             "connection": TPCH_CONN,
             "schema": TPCH_SF1,
             "table": "lineitem",
+            **_REQUIRED_TABLE_FIELDS,
             "synced": True,
             "columns": None,
         },
@@ -750,6 +762,7 @@ def test_list_tables_regex_like(httpserver: HTTPServer, srv: str):
             "connection": TPCH_CONN,
             "schema": TPCH_SF1,
             "table": "customer",
+            **_REQUIRED_TABLE_FIELDS,
             "synced": True,
             "columns": None,
         },
@@ -757,6 +770,7 @@ def test_list_tables_regex_like(httpserver: HTTPServer, srv: str):
             "connection": TPCH_CONN,
             "schema": TPCH_SF1,
             "table": "lineitem",
+            **_REQUIRED_TABLE_FIELDS,
             "synced": True,
             "columns": None,
         },
@@ -764,6 +778,7 @@ def test_list_tables_regex_like(httpserver: HTTPServer, srv: str):
             "connection": TPCH_CONN,
             "schema": TPCH_SF1,
             "table": "nation",
+            **_REQUIRED_TABLE_FIELDS,
             "synced": True,
             "columns": None,
         },
@@ -799,7 +814,14 @@ def test_ambiguous_default_connection(httpserver: HTTPServer, srv: str):
         _ = con.current_catalog
 
 
-def test_x_session_header_on_query(httpserver: HTTPServer, srv: str):
+def test_no_session_header_on_query(httpserver: HTTPServer, srv: str):
+    """The inverse of what this asserted before: no X-Session-Id on the wire.
+
+    Asserted at the HTTP layer rather than on the signature, because that is the
+    only place a revival shows up. Reading the value from the environment and
+    passing it into Configuration would restore the header with no signature
+    change at all, and every other check here would still pass.
+    """
     seen: list[str | None] = []
 
     def on_post(req: Request) -> Response:
@@ -839,7 +861,6 @@ def test_x_session_header_on_query(httpserver: HTTPServer, srv: str):
         api_url=srv,
         token="tok",
         workspace_id="ws",
-        session_id="sb_xyz",
         verify_ssl=False,
         default_connection=TPCH_CONN,
         default_schema=TPCH_SF1,
@@ -848,4 +869,10 @@ def test_x_session_header_on_query(httpserver: HTTPServer, srv: str):
     pdf = con.execute(ibis.literal(0).name("n"))
     assert pdf == 0
     assert len(seen) >= 1
-    assert all(h == "sb_xyz" for h in seen)
+    assert all(h is None for h in seen), f"X-Session-Id was sent: {seen}"
+
+    # And the argument that produced it is gone from the public signature.
+    with pytest.raises(TypeError, match="session_id"):
+        ibis.hotdata.connect(
+            api_url=srv, token="tok", workspace_id="ws", session_id="sb_xyz"
+        )

@@ -89,14 +89,11 @@ class HotdataClient:
         api_url: str,
         token: str,
         workspace_id: str,
-        session_id: str | None = None,
         timeout: float = 120.0,
         verify_ssl: bool | str = True,
     ) -> None:
         host = api_url.rstrip("/")
-        conf = Configuration(
-            host=host, api_key=token, workspace_id=workspace_id, session_id=session_id
-        )
+        conf = Configuration(host=host, api_key=token, workspace_id=workspace_id)
         if verify_ssl is False:
             conf.verify_ssl = False
         elif isinstance(verify_ssl, str):

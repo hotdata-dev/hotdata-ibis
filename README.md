@@ -63,7 +63,6 @@ con = ibis.hotdata.connect(
     token="YOUR_API_KEY",
     workspace_id="ws_...",
     # optional
-    session_id=None,           # sandbox id (X-Session-Id header)
     timeout=120.0,             # per-request HTTP timeout in seconds
     verify_ssl=True,           # False to skip TLS verification, or path to CA bundle
     default_connection=None,   # default catalog (connection id); auto-detected if only one exists
