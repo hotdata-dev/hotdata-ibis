@@ -4,16 +4,47 @@ on:
   push:
     tags:
       - 'v[0-9]*'
+  # Retry an existing tag without moving it. A publish can fail for reasons that
+  # have nothing to do with the code -- a stale action pin, a PyPI outage -- and
+  # with only the tag trigger the choices were to delete and re-push the tag or
+  # to burn a version number on a CI fix.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to act on (e.g. v0.5.0)'
+        required: true
+        type: string
 
 permissions:
   contents: write
+
+env:
+  # The tag being released, however this run was triggered.
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
 
 jobs:
   release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
     steps:
+      # Before checkout, and this workflow needs it more than publish.yml does:
+      # it holds `contents: write`, and action-gh-release CREATES a tag when
+      # tag_name does not resolve to one. An unvalidated `tag: main` would check
+      # out cleanly and then leave refs/tags/main plus a release named for it.
+      - name: Validate release tag format
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$INPUT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "tag must look like vX.Y.Z, got: $INPUT_TAG" >&2
+            exit 1
+          fi
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
@@ -23,7 +54,7 @@ jobs:
         id: meta
         run: |
           pkg_name=$(python -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['name'])")
-          pkg_version="${GITHUB_REF_NAME#v}"
+          pkg_version="${RELEASE_TAG#v}"
           echo "name=${pkg_name}" >> "$GITHUB_OUTPUT"
           echo "version=${pkg_version}" >> "$GITHUB_OUTPUT"
 
@@ -31,7 +62,7 @@ jobs:
         id: notes
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
+          version="${RELEASE_TAG#v}"
           if [[ -f CHANGELOG.md ]]; then
             body="$(python scripts/extract-changelog.py "$version")"
           else
@@ -47,8 +78,12 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
         with:
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ env.RELEASE_TAG }}
           name: ${{ steps.meta.outputs.name }} ${{ steps.meta.outputs.version }}
           body: ${{ steps.notes.outputs.body }}
           generate_release_notes: false
-          make_latest: true
+          # GitHub decides by tag date/semver rather than run order. `true` would
+          # move the badge when a dispatch repairs an older tag; `false` is not
+          # "leave alone" -- it marks a release explicitly NOT latest, demoting the
+          # newest tag in the case this trigger mostly serves.
+          make_latest: legacy

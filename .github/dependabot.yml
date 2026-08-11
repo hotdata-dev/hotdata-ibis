@@ -6,3 +6,10 @@ updates:
       interval: daily
     allow:
       - dependency-name: hotdata
+
+  # Action pins had no watcher, which is how gh-action-pypi-publish sat at v1.13.0
+  # until its bundled twine broke a sibling repo's release at upload time.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
