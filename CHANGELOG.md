@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+## [0.5.0] - 2026-08-11
+
 ### Removed
 
 - **Breaking:** session/sandbox support is gone. `ibis.hotdata.connect()` no
@@ -37,7 +40,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Test fixtures gained `partition_by` / `sorted_by` on every `TableInfo` dict:
   0.9.0 makes both required, so a listing response omitting them fails validation
   for the whole call rather than that field. The API always sends them.
-
 
 ## [0.4.0] - 2026-07-22
 
