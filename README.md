@@ -67,7 +67,7 @@ con = ibis.hotdata.connect(
     verify_ssl=True,           # False to skip TLS verification, or path to CA bundle
     default_connection=None,   # default catalog (connection id); auto-detected if only one exists
     default_schema=None,       # default schema; auto-detected if only one exists
-    database_id=None,          # bind an existing managed database id at connect time
+    database_id=None,          # bind an existing instant database id at connect time
     poll_interval_s=0.25,      # polling interval for async queries
     poll_timeout_s=600.0,      # max time to wait for a query result
 )
@@ -83,9 +83,9 @@ con = ibis.connect(
 )
 ```
 
-## Managed databases
+## Instant databases
 
-Managed databases are the primary way to bring data into Hotdata with Ibis. Declare a database and its tables, upload data, and query immediately.
+Instant databases are the primary way to bring data into Hotdata with Ibis. Declare a database and its tables, upload data, and query immediately.
 
 ### Create and load
 

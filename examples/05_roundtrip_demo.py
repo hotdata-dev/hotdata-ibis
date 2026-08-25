@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Ibis <-> Hotdata round trip: create a managed database, upload data, read it back.
+"""Ibis <-> Hotdata round trip: create an instant database, upload data, read it back.
 
-Demonstrates the managed-database read contract that ``hotdata-dlt-destination``'s
+Demonstrates the instant-database read contract that ``hotdata-dlt-destination``'s
 live ibis backend depends on: bind ``database_id`` (the id returned by
 ``create_database``, not its display name -- Hotdata database names are not
 unique) at connect time, then read through the ``"default"`` catalog -- both
@@ -34,7 +34,7 @@ API_BASE_URL = os.environ.get("HOTDATA_API_BASE_URL", "https://api.hotdata.dev")
 
 
 def write(api_url: str, token: str, workspace_id: str) -> str:
-    """Create the managed database and upload a small pandas DataFrame into it."""
+    """Create the instant database and upload a small pandas DataFrame into it."""
     con = ibis.hotdata.connect(api_url=api_url, token=token, workspace_id=workspace_id)
     database_id = con.create_database(DATABASE, tables=["spans"], schema=SCHEMA)
 
@@ -97,7 +97,7 @@ def main() -> None:
     database_id = write(API_BASE_URL, token, workspace_id)
     print(f"created database_id={database_id}")
 
-    print("\n== READ, via the managed-database contract ==")
+    print("\n== READ, via the instant-database contract ==")
     read_via_ibis(API_BASE_URL, token, workspace_id, database_id)
 
     print("\n== CLEANUP ==")

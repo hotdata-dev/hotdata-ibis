@@ -221,7 +221,7 @@ class HotdataClient:
         schema: str = "public",
         tables: Sequence[str] = (),
     ) -> dict[str, Any]:
-        """POST ``/v1/databases`` — creates a managed database.
+        """POST ``/v1/databases`` — creates an instant database.
 
         The database is created with an auto-provisioned default catalog.
         """

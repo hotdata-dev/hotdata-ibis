@@ -9,7 +9,7 @@ backend's compiler + ``to_pyarrow`` result plumbing need to handle correctly
 (multi-column projections, joins across tables, filters, ordering) -- not
 just a single trivial column.
 
-Ad hoc/federated querying (raw ``Connection`` tables, no managed database) is
+Ad hoc/federated querying (raw ``Connection`` tables, no instant database) is
 not used here: it's a deprecated path, and every query now requires a
 database scope server-side regardless.
 
@@ -40,7 +40,7 @@ API_BASE_URL = os.environ.get("HOTDATA_API_BASE_URL", "https://api.hotdata.dev")
 
 
 def setup(api_url: str, token: str, workspace_id: str) -> str:
-    """Create the managed database and load small customer/orders tables."""
+    """Create the instant database and load small customer/orders tables."""
     con = ibis.hotdata.connect(api_url=api_url, token=token, workspace_id=workspace_id)
     database_id = con.create_database(DATABASE, tables=["customer", "orders"], schema=SCHEMA)
 
@@ -120,7 +120,7 @@ def main() -> None:
     token = os.environ["HOTDATA_API_KEY"]
     workspace_id = os.environ["HOTDATA_WORKSPACE"]
 
-    print("== SETUP (managed database: customer, orders) ==")
+    print("== SETUP (instant database: customer, orders) ==")
     database_id = setup(API_BASE_URL, token, workspace_id)
     print(f"created database_id={database_id}")
 

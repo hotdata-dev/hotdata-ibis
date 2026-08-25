@@ -17,7 +17,7 @@ pytest.importorskip("pytest_httpserver")
 from conftest import mock_presigned_upload_flow
 from pytest_httpserver import HTTPServer
 
-# Managed database identifiers for mocked Hotdata (SQL shape ``sales.public.orders``).
+# Instant database identifiers for mocked Hotdata (SQL shape ``sales.public.orders``).
 MANAGED_DB_ID = "db_sales"      # databases API id
 MANAGED_CONN = "conn_sales"     # default_connection_id (backing connection for loads)
 MANAGED_NAME = "sales"          # description
@@ -595,12 +595,12 @@ def test_drop_table_raises_for_unknown_database(httpserver: HTTPServer, srv: str
 
     con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
 
-    with pytest.raises(com.IbisError, match="Unknown managed database"):
+    with pytest.raises(com.IbisError, match="Unknown instant database"):
         con.drop_table("demo", database=(TPCH_CONN, PUBLIC))
 
 
 def test_drop_table_force_ignores_unknown_database(httpserver: HTTPServer, srv: str):
-    # force=True silently swallows the "Unknown managed database" IbisError
+    # force=True silently swallows the "Unknown instant database" IbisError
     httpserver.expect_request(f"/v1/databases/{TPCH_CONN}").respond_with_data(
         json.dumps({"detail": "not found"}), status=404, content_type="application/json"
     )

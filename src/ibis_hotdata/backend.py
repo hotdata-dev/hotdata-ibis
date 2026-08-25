@@ -170,7 +170,7 @@ class Backend(
             Optional default **database** (remote schema name). If omitted and only
             one schema exists for the default connection, it is chosen automatically.
         database_id
-            Optional managed database id to bind at connect time. When set, all
+            Optional instant database id to bind at connect time. When set, all
             queries use this database's ``X-Database-Id`` header and ``"default"``
             catalog references resolve to the underlying connection automatically —
             without needing to call ``create_table`` first.
@@ -335,7 +335,7 @@ class Backend(
         raise com.IbisError(f"Unknown Hotdata connection {name_or_id!r}")
 
     def _find_managed_connection(self, database_id: str) -> dict[str, Any] | None:
-        """Look up a managed database by id.
+        """Look up an instant database by id.
 
         Returns the detail dict if found, ``None`` if not found.
         Raises :class:`~ibis.common.exceptions.IbisError` on API failures.
@@ -348,10 +348,10 @@ class Backend(
             raise _ibis_err_from_hotdata(exc) from exc
 
     def _resolve_managed_connection(self, database_id: str) -> dict[str, Any]:
-        """Resolve a managed database by id, returning its detail dict."""
+        """Resolve an instant database by id, returning its detail dict."""
         result = self._find_managed_connection(database_id)
         if result is None:
-            raise com.IbisError(f"Unknown managed database {database_id!r}")
+            raise com.IbisError(f"Unknown instant database {database_id!r}")
         return result
 
     def _managed_table_synced(
@@ -399,15 +399,15 @@ class Backend(
         db_record = self._resolve_managed_connection(conn)
         conn_id = db_record["default_connection_id"]
         # Always update both cached values so they stay in sync across multiple
-        # create_table / drop_table calls, even if different managed databases are used.
+        # create_table / drop_table calls, even if different instant databases are used.
         self._database_id = db_record["id"]
         self._database_connection_id = conn_id
         return conn_id, schema
 
     def _resolve_database_connection_id(self) -> str | None:
-        """Return the actual connection_id for the current managed database context.
+        """Return the actual connection_id for the current instant database context.
 
-        Managed database SQL uses ``"default"`` as the catalog, but the information
+        Instant database SQL uses ``"default"`` as the catalog, but the information
         schema REST API still needs the real ``connection_id``.  This method resolves
         that mapping lazily and caches the result.
         """
@@ -432,7 +432,7 @@ class Backend(
     ) -> sch.Schema:
         conn = catalog or self.current_catalog
         schema_name = database or self.current_database
-        # Managed database tables use "default" as the SQL catalog but the info
+        # Instant database tables use "default" as the SQL catalog but the info
         # schema REST API needs the real connection_id.
         api_conn = (
             (self._resolve_database_connection_id() or conn)
@@ -665,7 +665,7 @@ class Backend(
     ) -> ir.Table:
         """Upload local data into a declared managed table.
 
-        ``database``'s first element must be the managed database id returned
+        ``database``'s first element must be the instant database id returned
         by ``create_database``, not its display name — Hotdata database names
         are not unique.
 
@@ -679,7 +679,7 @@ class Backend(
         data = self._local_table_to_parquet(obj, schema)
         connection_id, schema_name = self._table_location(database)
         # Cache the resolved connection_id so get_schema can use it for info schema
-        # API calls when the "default" catalog is used in managed database contexts.
+        # API calls when the "default" catalog is used in instant database contexts.
         self._database_connection_id = connection_id
         if not overwrite and self._managed_table_synced(connection_id, schema_name, name):
             raise com.IbisInputError(
@@ -695,7 +695,7 @@ class Backend(
             )
         except HotdataAPIError as exc:
             raise _ibis_err_from_hotdata(exc) from exc
-        # Managed database SQL requires "default" as the catalog prefix, not the
+        # Instant database SQL requires "default" as the catalog prefix, not the
         # raw connection_id.  _table_location always sets _database_id when resolving
         # a managed connection, so we can always use the "default" catalog here.
         return self.table(name, database=("default", schema_name))
