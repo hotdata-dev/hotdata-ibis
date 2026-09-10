@@ -663,7 +663,10 @@ class Backend(
         temp: bool = False,
         overwrite: bool = False,
     ) -> ir.Table:
-        """Upload local data into a declared managed table.
+        """Upload local data into a managed table.
+
+        The table does not have to be declared in advance: loading into an
+        undeclared table creates it automatically as part of the load.
 
         ``database``'s first element must be the instant database id returned
         by ``create_database``, not its display name — Hotdata database names
