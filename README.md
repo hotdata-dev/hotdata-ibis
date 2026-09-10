@@ -2,7 +2,7 @@
 
 Use [Ibis](https://ibis-project.org/) to create on-demand databases, upload data, and query with Python expressions — get pandas or Arrow results back without writing SQL.
 
-**Requirements:** Python 3.10+, **ibis-framework** ≥12,<13, **hotdata** ≥0.7,<0.9.
+**Requirements:** Python 3.10+, **ibis-framework** ≥12,<13, **hotdata** ≥0.9,<0.10.
 
 ## Install
 
@@ -112,7 +112,7 @@ con.create_table(
 )
 ```
 
-Table names must be declared when the database is created — you cannot upload to a table name that was not listed in `tables=`.
+Declaring table names in `tables=` is optional — loading into a table that was not declared creates it automatically as part of the load.
 
 ### Query
 
@@ -241,19 +241,21 @@ con = ibis.hotdata.connect(
     api_url="https://api.hotdata.dev",
     token="YOUR_API_KEY",
     workspace_id="ws_...",
-    default_connection="my_postgres",
+    default_connection="<connection_id>",  # a connection id, from con.list_catalogs()
     default_schema="public",
 )
 
-t = con.table("orders")  # resolves to my_postgres.public.orders
+t = con.table("orders")  # resolves to <connection_id>.public.orders
 ```
 
-Discover what's available:
+Discover what's available. Catalogs are connection **ids** — the `id` field of the
+workspace's connections, as returned by `list_catalogs()` — not display names:
 
 ```python
-con.list_catalogs()                                    # connection IDs
-con.list_databases(catalog="my_postgres")              # schemas
-con.list_tables(database=("my_postgres", "public"))    # tables
+con.list_catalogs()                                # connection ids
+conn_id = con.list_catalogs()[0]
+con.list_databases(catalog=conn_id)                # schemas
+con.list_tables(database=(conn_id, "public"))      # tables
 ```
 
 ## What's supported
