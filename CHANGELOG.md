@@ -7,11 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+## [0.6.0] - 2026-10-01
+
 ### Changed
 
-- Require `hotdata>=0.11,<0.12` (was `>=0.9.0,<0.10`), so it can be
-  installed alongside `hotdata-framework` 0.14.1. Managed-table loads now send
-  `"async": false` explicitly, keeping them synchronous.
+- Require `hotdata>=0.11,<0.12` (was `>=0.9.0,<0.10`).
+- User-facing text now says "instant database" instead of "managed database".
+
+### Fixed
+
+- Corrected three outdated claims in the README.
+- The `create_table` docstring no longer implies the table must be declared
+  first.
 
 ## [0.5.0] - 2026-08-11
 
