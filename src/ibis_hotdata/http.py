@@ -249,7 +249,7 @@ class HotdataClient:
         *,
         upload_id: str,
     ) -> dict[str, Any]:
-        req = LoadManagedTableRequest(mode="replace", upload_id=upload_id)
+        req = LoadManagedTableRequest(mode="replace", upload_id=upload_id, var_async=False)
         resp = self._safe_call(
             self._connections.load_managed_table,
             connection_id,

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Require `hotdata>=0.11,<0.12` (was `>=0.9.0,<0.10`), so it can be
+  installed alongside `hotdata-framework` 0.14.1. Managed-table loads now send
+  `"async": false` explicitly, keeping them synchronous.
 
 ## [0.5.0] - 2026-08-11
 

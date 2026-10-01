@@ -120,7 +120,7 @@ def mock_managed_create_table_flow(
 
     def on_load(req: Request) -> Response:
         body = req.get_json()
-        assert body == {"mode": "replace", "upload_id": "upl_1"}
+        assert body == {"async": False, "mode": "replace", "upload_id": "upl_1"}
         return Response(
             json.dumps(
                 {

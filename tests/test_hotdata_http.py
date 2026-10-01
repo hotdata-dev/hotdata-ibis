@@ -234,7 +234,7 @@ def test_upload_file_then_load_managed_table(httpserver: HTTPServer):
 
     def on_load(req: Request) -> Response:
         body = req.get_json()
-        assert body == {"mode": "replace", "upload_id": "upl_1"}
+        assert body == {"async": False, "mode": "replace", "upload_id": "upl_1"}
         payload = {
             "connection_id": "conn_sales",
             "schema_name": "public",
