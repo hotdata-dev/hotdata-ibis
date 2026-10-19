@@ -84,8 +84,11 @@ class Backend(
         * Base URL defaults to ``https://{host}`` plus optional leading ``path``.
         * Query string may include ``token``, ``workspace_id``, ``timeout``,
           ``verify_ssl`` (``true`` / ``false``), ``default_connection``,
-          ``default_schema``, ``poll_interval_s``, ``poll_timeout_s``.
+          ``default_schema``, ``database_id``, ``async_after_ms`` (``none`` to
+          disable), ``poll_interval_s``, ``poll_timeout_s``.
         * If ``token`` is omitted, ``urlparse`` password (`user:TOKEN@`) is accepted.
+        * A missing ``token`` / ``workspace_id`` falls back to ``HOTDATA_API_KEY`` /
+          ``HOTDATA_WORKSPACE``.
         """
         q = dict(parse_qsl(url.query, keep_blank_values=True))
         q.update(kwarg_overrides)
@@ -111,6 +114,7 @@ class Backend(
         token = q.pop("token", None) or (unquote_plus(url.password) if url.password else None)
         workspace_id = q.pop("workspace_id", None)
 
+        async_after = q.pop("async_after_ms", "1000")
         kwargs = {
             "api_url": api_url,
             "token": token,
@@ -119,45 +123,49 @@ class Backend(
             "verify_ssl": verify_ssl,
             "default_connection": q.pop("default_connection", None),
             "default_schema": q.pop("default_schema", None),
+            "database_id": q.pop("database_id", None),
+            "async_after_ms": (
+                None if str(async_after).lower() in ("", "none") else int(async_after)
+            ),
             "poll_interval_s": float(q.pop("poll_interval_s", "0.25")),
             "poll_timeout_s": float(q.pop("poll_timeout_s", "600")),
         }
 
         self._convert_kwargs(kwargs)
-        if not kwargs.get("token"):
-            raise com.IbisError("Hotdata URL missing token (query parameter or password segment)")
-        if not kwargs.get("workspace_id"):
-            raise com.IbisError("Hotdata URL missing workspace_id query parameter")
-
         return self.connect(**kwargs)
 
     def do_connect(
         self,
         *,
-        api_url: str,
-        token: str,
-        workspace_id: str,
+        api_url: str | None = None,
+        token: str | None = None,
+        workspace_id: str | None = None,
         timeout: float = 120.0,
         verify_ssl: bool | str = True,
         default_connection: str | None = None,
         default_schema: str | None = None,
         database_id: str | None = None,
+        async_after_ms: int | None = 1000,
         poll_interval_s: float = 0.25,
         poll_timeout_s: float = 600.0,
     ) -> None:
         """Create an Ibis client for a Hotdata workspace.
 
-        Query execution always uses Hotdata's async path and downloads ready
-        results as Arrow IPC from ``GET /v1/results/{id}``.
+        Queries ask for an inline Arrow IPC response. A query that finishes
+        within ``async_after_ms`` returns its rows in one request; slower or
+        larger ones are polled and their results downloaded as Arrow IPC from
+        ``GET /v1/results/{id}``.
 
         Parameters
         ----------
         api_url
-            Hotdata API base URL (e.g. ``https://api.hotdata.dev``).
+            Hotdata API base URL. Defaults to ``HOTDATA_API_URL``, else
+            ``https://api.hotdata.dev``.
         token
-            API bearer token (``Authorization`` header).
+            API bearer token (``Authorization`` header). Defaults to ``HOTDATA_API_KEY``.
         workspace_id
-            Workspace public id (``X-Workspace-Id`` header).
+            Workspace public id (``X-Workspace-Id`` header). Defaults to
+            ``HOTDATA_WORKSPACE``.
         timeout
             HTTP timeout in seconds (per request).
         verify_ssl
@@ -174,6 +182,9 @@ class Backend(
             queries use this database's ``X-Database-Id`` header and ``"default"``
             catalog references resolve to the underlying connection automatically —
             without needing to call ``create_table`` first.
+        async_after_ms
+            How long (ms, at least 1000) a query may run inline before Hotdata
+            switches it to async. ``None`` makes every query async.
         poll_interval_s
             Sleep between ``GET /v1/query-runs/{id}`` polls.
         poll_timeout_s
@@ -187,14 +198,18 @@ class Backend(
         self._database_connection_id: str | None = None
         self._poll_interval_s = poll_interval_s
         self._poll_timeout_s = poll_timeout_s
+        self._async_after_ms = async_after_ms
 
-        self._http = HotdataClient(
-            api_url=api_url,
-            token=token,
-            workspace_id=workspace_id,
-            timeout=timeout,
-            verify_ssl=verify_ssl,
-        )
+        try:
+            self._http = HotdataClient(
+                api_url=api_url,
+                token=token,
+                workspace_id=workspace_id,
+                timeout=timeout,
+                verify_ssl=verify_ssl,
+            )
+        except HotdataAPIError as exc:
+            raise _ibis_err_from_hotdata(exc) from exc
 
     def disconnect(self) -> None:
         if hasattr(self, "_http"):
@@ -466,6 +481,7 @@ class Backend(
             data = self._http.execute_query(
                 preview_sql,
                 database_id=self._database_id,
+                async_after_ms=self._async_after_ms,
                 poll_interval_s=self._poll_interval_s,
                 poll_timeout_s=self._poll_timeout_s,
             )
@@ -488,6 +504,7 @@ class Backend(
             payload = self._http.execute_query(
                 query,
                 database_id=self._database_id,
+                async_after_ms=self._async_after_ms,
                 poll_interval_s=self._poll_interval_s,
                 poll_timeout_s=self._poll_timeout_s,
             )
@@ -518,6 +535,7 @@ class Backend(
             payload = self._http.execute_query(
                 sql,
                 database_id=self._database_id,
+                async_after_ms=self._async_after_ms,
                 poll_interval_s=self._poll_interval_s,
                 poll_timeout_s=self._poll_timeout_s,
             )
@@ -721,6 +739,90 @@ class Backend(
             raise
         try:
             self._http.delete_managed_table(connection_id, schema_name, name)
+        except HotdataAPIError as exc:
+            if force and exc.status_code == 404:
+                return
+            raise _ibis_err_from_hotdata(exc) from exc
+
+    def create_index(
+        self,
+        table: str,
+        columns: str | Sequence[str],
+        /,
+        *,
+        name: str,
+        database: tuple[str, str] | str | None = None,
+        index_type: str = "vector",
+        metric: str | None = None,
+        algorithm: str | None = None,
+        vector_precision: str | None = None,
+        nlist: int | None = None,
+        probe_fraction: float | None = None,
+        embedding_provider_id: str | None = None,
+        output_column: str | None = None,
+        dimensions: int | None = None,
+    ) -> dict[str, Any]:
+        """Create an index on an instant-database table and return its details.
+
+        ``index_type`` is ``"vector"`` (default), ``"bm25"`` or ``"sorted"``.
+        Vector options: ``metric`` (``"l2"``, ``"cosine"``, ``"dot"``),
+        ``algorithm`` (``"hnsw"`` default, or ``"ivf"`` for tables too large for
+        HNSW), ``vector_precision``, and for IVF ``nlist`` / ``probe_fraction``.
+        Set ``embedding_provider_id`` to index a text column: Hotdata generates
+        the embeddings into ``output_column`` (default ``{column}_embedding``).
+
+        The build runs within one request; raise ``timeout=`` on ``connect``
+        for large tables. ``database`` is addressed as in :meth:`create_table`.
+        """
+        cols = [columns] if isinstance(columns, str) else list(columns)
+        connection_id, schema_name = self._table_location(database)
+        try:
+            return self._http.create_index(
+                connection_id,
+                schema_name,
+                table,
+                index_name=name,
+                columns=cols,
+                index_type=index_type,
+                metric=metric,
+                algorithm=algorithm,
+                vector_precision=vector_precision,
+                nlist=nlist,
+                probe_fraction=probe_fraction,
+                embedding_provider_id=embedding_provider_id,
+                output_column=output_column,
+                dimensions=dimensions,
+            )
+        except HotdataAPIError as exc:
+            raise _ibis_err_from_hotdata(exc) from exc
+
+    def list_indexes(
+        self,
+        table: str,
+        /,
+        *,
+        database: tuple[str, str] | str | None = None,
+    ) -> list[dict[str, Any]]:
+        """List the indexes on an instant-database table."""
+        connection_id, schema_name = self._table_location(database)
+        try:
+            return self._http.list_indexes(connection_id, schema_name, table)
+        except HotdataAPIError as exc:
+            raise _ibis_err_from_hotdata(exc) from exc
+
+    def drop_index(
+        self,
+        table: str,
+        name: str,
+        /,
+        *,
+        database: tuple[str, str] | str | None = None,
+        force: bool = False,
+    ) -> None:
+        """Drop index ``name`` from a table; ``force=True`` ignores a missing index."""
+        connection_id, schema_name = self._table_location(database)
+        try:
+            self._http.delete_index(connection_id, schema_name, table, name)
         except HotdataAPIError as exc:
             if force and exc.status_code == 404:
                 return
