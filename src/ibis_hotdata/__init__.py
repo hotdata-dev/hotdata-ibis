@@ -11,6 +11,7 @@ from ibis_hotdata.vector import (
     l2_distance,
     negative_dot_product,
     semantic_search,
+    vector_distance,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "l2_distance",
     "negative_dot_product",
     "semantic_search",
+    "vector_distance",
 ]

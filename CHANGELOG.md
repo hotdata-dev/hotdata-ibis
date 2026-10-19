@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Queries return their rows in one request when they finish within
+  `async_after_ms` (default 1000; `None` = always async), using the inline
+  Arrow response. Slower or larger queries still poll as before.
+- `connect()` falls back to `HOTDATA_API_URL`, `HOTDATA_API_KEY` and
+  `HOTDATA_WORKSPACE` when `api_url`, `token` or `workspace_id` is not passed.
+  `database_id` and `async_after_ms` are also accepted in `hotdata://` URLs.
+- `create_index`, `list_indexes` and `drop_index` on the backend, including
+  IVF vector indexes (`algorithm`, `nlist`, `probe_fraction`,
+  `vector_precision`) and embedding-provider indexes.
+- `vector_distance` UDF, and `semantic_search` accepts a text query for
+  embedding-backed indexes.
+
+### Changed
+
+- Require `hotdata>=0.12,<0.13` (was `>=0.11,<0.12`).
+- Instant-database table loads now retry while another load holds the table
+  lock (uses the SDK's top-level `ConnectionsApi`/`DatabasesApi`).
+
 ## [0.6.0] - 2026-10-01
 
 ### Changed

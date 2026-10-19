@@ -37,12 +37,13 @@ TPCH_CUSTOMER_COLS = [
 ]
 
 
-# TableInfo requires these from hotdata 0.9.0 on. The API always sends them, and
-# an omission fails validation for the WHOLE information_schema call rather than
-# for that field — nine tests here failed exactly that way before it was added.
+# TableInfo requires these from hotdata 0.9.0 on (constant_per_key from 0.12.0).
+# The API always sends them, and an omission fails validation for the WHOLE
+# information_schema call rather than for that field — nine tests here failed
+# exactly that way before each was added.
 # Spread into each fixture rather than repeated, so the next required field is a
 # one-line change here.
-_REQUIRED_TABLE_FIELDS = {"partition_by": [], "sorted_by": []}
+_REQUIRED_TABLE_FIELDS = {"constant_per_key": [], "partition_by": [], "sorted_by": []}
 
 
 def arrow_stream(table: pa.Table) -> bytes:
@@ -876,3 +877,97 @@ def test_no_session_header_on_query(httpserver: HTTPServer, srv: str):
         ibis.hotdata.connect(
             api_url=srv, token="tok", workspace_id="ws", session_id="sb_xyz"
         )
+
+
+def test_connect_reads_credentials_from_env(httpserver: HTTPServer, srv: str, monkeypatch):
+    monkeypatch.setenv("HOTDATA_API_URL", srv)
+    monkeypatch.setenv("HOTDATA_API_KEY", "envtok")
+    monkeypatch.setenv("HOTDATA_WORKSPACE", "ws_env")
+    httpserver.expect_request("/v1/connections").respond_with_json(
+        {"connections": [{"id": TPCH_CONN, "name": "tpch", "source_type": "duckdb"}]}
+    )
+
+    con = ibis.hotdata.connect(verify_ssl=False)
+    assert con.list_catalogs() == [TPCH_CONN]
+
+
+def test_connect_without_credentials_raises(monkeypatch):
+    monkeypatch.delenv("HOTDATA_API_KEY", raising=False)
+    monkeypatch.setenv("HOTDATA_WORKSPACE", "ws_env")
+    with pytest.raises(com.IbisError, match="HOTDATA_API_KEY"):
+        ibis.hotdata.connect()
+
+
+@pytest.mark.parametrize(("value", "expected"), [("5000", 5000), ("none", None)])
+def test_url_async_after_ms(httpserver: HTTPServer, srv: str, value, expected):
+    url = (
+        f"hotdata://127.0.0.1:{httpserver.port}?token=tok&workspace_id=ws"
+        f"&verify_ssl=false&api_url={srv}&async_after_ms={value}"
+    )
+    con = ibis.connect(url)
+    assert con._async_after_ms == expected
+
+
+_INDEX_PATH = f"/v1/connections/{MANAGED_CONN}/tables/{PUBLIC}/docs/indexes"
+_INDEX_INFO = {
+    "index_name": "docs_idx",
+    "index_type": "vector",
+    "columns": ["embedding"],
+    "algorithm": "hnsw",
+    "metric": "cosine",
+    "status": "ready",
+    "created_at": "2026-01-01T00:00:00Z",
+    "updated_at": "2026-01-01T00:00:00Z",
+}
+
+
+def test_create_index_resolves_instant_database(httpserver: HTTPServer, srv: str):
+    httpserver.expect_request(f"/v1/databases/{MANAGED_DB_ID}").respond_with_json(
+        managed_database_detail_response()
+    )
+
+    def on_create(req: Request) -> Response:
+        assert req.get_json() == {
+            "index_name": "docs_idx",
+            "columns": ["embedding"],
+            "index_type": "vector",
+            "metric": "cosine",
+            "async": False,
+        }
+        return Response(json.dumps(_INDEX_INFO), status=201, content_type="application/json")
+
+    httpserver.expect_oneshot_request(_INDEX_PATH, method="POST").respond_with_handler(on_create)
+
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+    out = con.create_index(
+        "docs", "embedding", name="docs_idx", database=(MANAGED_DB_ID, PUBLIC), metric="cosine"
+    )
+    assert out["index_name"] == "docs_idx"
+    httpserver.check_assertions()
+
+
+def test_list_indexes(httpserver: HTTPServer, srv: str):
+    httpserver.expect_request(f"/v1/databases/{MANAGED_DB_ID}").respond_with_json(
+        managed_database_detail_response()
+    )
+    httpserver.expect_request(_INDEX_PATH, method="GET").respond_with_json(
+        {"indexes": [_INDEX_INFO]}
+    )
+
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+    out = con.list_indexes("docs", database=(MANAGED_DB_ID, PUBLIC))
+    assert [i["index_name"] for i in out] == ["docs_idx"]
+
+
+def test_drop_index_force_ignores_missing(httpserver: HTTPServer, srv: str):
+    httpserver.expect_request(f"/v1/databases/{MANAGED_DB_ID}").respond_with_json(
+        managed_database_detail_response()
+    )
+    httpserver.expect_request(f"{_INDEX_PATH}/nope", method="DELETE").respond_with_data(
+        b"not found", status=404
+    )
+
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+    con.drop_index("docs", "nope", database=(MANAGED_DB_ID, PUBLIC), force=True)
+    with pytest.raises(com.IbisError):
+        con.drop_index("docs", "nope", database=(MANAGED_DB_ID, PUBLIC))

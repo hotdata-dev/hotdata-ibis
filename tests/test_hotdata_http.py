@@ -354,3 +354,176 @@ def test_upload_file_accepts_content_type(httpserver: HTTPServer):
     out = client.upload_file(b"parquet", content_type="application/parquet")
     assert out["upload_id"] == "upl_1"
     client.close()
+
+
+def _arrow_blob(table: pa.Table) -> bytes:
+    sink = io.BytesIO()
+    with ipc.new_stream(sink, table.schema) as writer:
+        writer.write_table(table)
+    return sink.getvalue()
+
+
+def _client(httpserver: HTTPServer) -> HotdataClient:
+    return HotdataClient(
+        api_url=httpserver.url_for("/").rstrip("/"),
+        token="tok",
+        workspace_id="ws1",
+        verify_ssl=False,
+    )
+
+
+def test_execute_query_inline_arrow_single_request(httpserver: HTTPServer):
+    """A query that finishes in time returns its rows in the POST response itself."""
+
+    def on_query(req: Request) -> Response:
+        assert req.headers["Accept"] == APPLICATION_ARROW_STREAM
+        assert req.get_json() == {"async": True, "async_after_ms": 1000, "sql": "select 42"}
+        return Response(
+            _arrow_blob(pa.table({"n": [42]})),
+            status=200,
+            content_type=APPLICATION_ARROW_STREAM,
+            headers={
+                "X-Query-Run-Id": "run1",
+                "X-Result-Id": "res1",
+                "X-Execution-Time-Ms": "7",
+                "X-Query-Warning": "careful",
+            },
+        )
+
+    httpserver.expect_oneshot_request("/v1/query", method="POST").respond_with_handler(on_query)
+
+    client = _client(httpserver)
+    body = client.execute_query("select 42")
+    client.close()
+
+    assert body["pa_table"].to_pydict() == {"n": [42]}
+    assert body["result_id"] == "res1"
+    assert body["query_run_id"] == "run1"
+    assert body["execution_time_ms"] == 7
+    assert body["warning"] == "careful"
+    httpserver.check_assertions()
+
+
+def test_execute_query_async_after_ms_none_sends_pure_async(httpserver: HTTPServer):
+    def on_query(req: Request) -> Response:
+        assert req.get_json() == {"async": True, "sql": "select 1"}
+        return Response(
+            _arrow_blob(pa.table({"n": [1]})), status=200, content_type=APPLICATION_ARROW_STREAM
+        )
+
+    httpserver.expect_oneshot_request("/v1/query", method="POST").respond_with_handler(on_query)
+    client = _client(httpserver)
+    assert client.execute_query("select 1", async_after_ms=None)["pa_table"].num_rows == 1
+    client.close()
+
+
+def test_execute_query_too_large_to_inline_fetches_named_result(httpserver: HTTPServer):
+    """202 with X-Result-Id: read the result directly, skipping the query-run poll."""
+    httpserver.expect_oneshot_request("/v1/query", method="POST").respond_with_json(
+        {"query_run_id": "run1", "status": "running", "status_url": "http://poll"},
+        status=202,
+        headers={"X-Result-Id": "res1"},
+    )
+    httpserver.expect_oneshot_request("/v1/results/res1").respond_with_data(
+        _arrow_blob(pa.table({"n": [1, 2]})), status=200, content_type=APPLICATION_ARROW_STREAM
+    )
+
+    client = _client(httpserver)
+    body = client.execute_query("select n", poll_interval_s=0, poll_timeout_s=5)
+    client.close()
+
+    assert body["pa_table"].to_pydict() == {"n": [1, 2]}
+    httpserver.check_assertions()
+
+
+def test_execute_query_inline_error_carries_status(httpserver: HTTPServer):
+    httpserver.expect_oneshot_request("/v1/query", method="POST").respond_with_json(
+        {"error": {"message": "syntax error"}}, status=400
+    )
+    client = _client(httpserver)
+    with pytest.raises(HotdataAPIError, match="syntax error") as info:
+        client.execute_query("selec 1")
+    client.close()
+    assert info.value.status_code == 400
+
+
+def test_client_reads_credentials_from_env(httpserver: HTTPServer, monkeypatch):
+    monkeypatch.setenv("HOTDATA_API_URL", httpserver.url_for("/").rstrip("/"))
+    monkeypatch.setenv("HOTDATA_API_KEY", "envtok")
+    monkeypatch.setenv("HOTDATA_WORKSPACE", "ws_env")
+
+    def on_query(req: Request) -> Response:
+        assert req.headers["X-Workspace-Id"] == "ws_env"
+        return Response(
+            _arrow_blob(pa.table({"n": [1]})), status=200, content_type=APPLICATION_ARROW_STREAM
+        )
+
+    httpserver.expect_oneshot_request("/v1/query", method="POST").respond_with_handler(on_query)
+    client = HotdataClient(verify_ssl=False)
+    assert client.execute_query("select 1")["pa_table"].num_rows == 1
+    client.close()
+    httpserver.check_assertions()
+
+
+@pytest.mark.parametrize(
+    ("missing", "match"),
+    [("HOTDATA_API_KEY", "HOTDATA_API_KEY"), ("HOTDATA_WORKSPACE", "HOTDATA_WORKSPACE")],
+)
+def test_client_missing_credentials_raises(monkeypatch, missing, match):
+    monkeypatch.setenv("HOTDATA_API_KEY", "envtok")
+    monkeypatch.setenv("HOTDATA_WORKSPACE", "ws_env")
+    monkeypatch.delenv(missing)
+    with pytest.raises(HotdataAPIError, match=match):
+        HotdataClient()
+
+
+_INDEX = {
+    "index_name": "docs_idx",
+    "index_type": "vector",
+    "columns": ["embedding"],
+    "algorithm": "ivf",
+    "metric": "cosine",
+    "status": "ready",
+    "created_at": "2026-01-01T00:00:00Z",
+    "updated_at": "2026-01-01T00:00:00Z",
+}
+
+
+def test_create_index_drops_unset_options(httpserver: HTTPServer):
+    def on_create(req: Request) -> Response:
+        assert req.get_json() == {
+            "index_name": "docs_idx",
+            "columns": ["embedding"],
+            "index_type": "vector",
+            "algorithm": "ivf",
+            "metric": "cosine",
+            "async": False,
+        }
+        return Response(json.dumps(_INDEX), status=201, content_type="application/json")
+
+    httpserver.expect_oneshot_request(
+        "/v1/connections/conn1/tables/main/docs/indexes", method="POST"
+    ).respond_with_handler(on_create)
+
+    client = _client(httpserver)
+    out = client.create_index(
+        "conn1",
+        "main",
+        "docs",
+        index_name="docs_idx",
+        columns=["embedding"],
+        index_type="vector",
+        algorithm="ivf",
+        metric="cosine",
+        nlist=None,
+    )
+    client.close()
+    assert out["algorithm"] == "ivf"
+    httpserver.check_assertions()
+
+
+def test_create_index_rejects_invalid_option_before_sending(httpserver: HTTPServer):
+    client = _client(httpserver)
+    with pytest.raises(HotdataAPIError, match="Invalid index request"):
+        client.create_index("c", "s", "t", index_name="i", columns=["x"], algorithm="bogus")
+    client.close()

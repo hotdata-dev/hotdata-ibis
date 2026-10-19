@@ -68,9 +68,19 @@ con = ibis.hotdata.connect(
     default_connection=None,   # default catalog (connection id); auto-detected if only one exists
     default_schema=None,       # default schema; auto-detected if only one exists
     database_id=None,          # bind an existing instant database id at connect time
+    async_after_ms=1000,       # queries finishing within this return rows in one request;
+                               # slower ones go async. None = always async
     poll_interval_s=0.25,      # polling interval for async queries
     poll_timeout_s=600.0,      # max time to wait for a query result
 )
+```
+
+`api_url`, `token` and `workspace_id` fall back to the `HOTDATA_API_URL`,
+`HOTDATA_API_KEY` and `HOTDATA_WORKSPACE` environment variables (same as the
+Hotdata CLI), so with those set this is enough:
+
+```python
+con = ibis.hotdata.connect()
 ```
 
 URL-style also works, with the same parameters as query string keys:
@@ -210,27 +220,47 @@ result = semantic_search(t, "embedding", query_vector, k=10, distance_fn=l2_dist
 vector column excluded from the output — the SQL shape Hotdata's query engine requires to
 route the query through its HNSW index instead of a brute-force scan.
 
-Creating the HNSW index itself isn't wrapped by this package yet — use the `hotdata` SDK
-directly:
+### Text queries
+
+For a text column indexed with an embedding provider, pass the query as a string.
+Hotdata embeds it with the index's provider (`vector_distance(col, 'text')`):
 
 ```python
-from hotdata import ApiClient, Configuration
-from hotdata.api.indexes_api import IndexesApi
-from hotdata.models.create_index_request import CreateIndexRequest
-
-api = IndexesApi(ApiClient(Configuration(...)))
-api.create_index(
-    connection_id=connection_id,
-    var_schema="main",
-    table="docs",
-    create_index_request=CreateIndexRequest(
-        index_name="docs_embedding_idx",
-        index_type="vector",
-        columns=["embedding"],
-        metric="cosine",
-    ),
-)
+result = semantic_search(t, "body", "how do refunds work?", k=10).execute()
 ```
+
+The text column stays in the output; vector (array) columns such as the generated
+`body_embedding` are left out.
+
+### Managing indexes
+
+Create, list and drop indexes on instant-database tables (`database=` works as in
+`create_table`):
+
+```python
+db = (db_id, "main")
+
+# HNSW (default): fastest search, memory grows with the table
+con.create_index("docs", "embedding", name="docs_idx", database=db, metric="cosine")
+
+# IVF: for tables too large for HNSW; tune recall/speed with probe_fraction
+con.create_index(
+    "docs", "embedding", name="docs_idx", database=db,
+    algorithm="ivf", metric="cosine", probe_fraction=0.1,
+)
+
+# Hotdata generates the embeddings from a text column
+con.create_index(
+    "docs", "body", name="docs_body_idx", database=db,
+    embedding_provider_id="ep_...",
+)
+
+con.list_indexes("docs", database=db)
+con.drop_index("docs", "docs_idx", database=db)
+```
+
+`index_type` can also be `"bm25"` (full-text) or `"sorted"`. The index builds within
+one request, so raise `timeout=` on `connect` for large tables.
 
 ## Connecting to existing sources
 
@@ -265,13 +295,14 @@ con.list_tables(database=(conn_id, "public"))      # tables
 | `create_database` / `drop_database` (managed) | ✅ |
 | `create_table` from pandas / PyArrow / schema-only | ✅ |
 | `drop_table` | ✅ |
+| `create_index` / `list_indexes` / `drop_index` (vector HNSW/IVF, BM25, sorted) | ✅ |
 | `con.table(...)` with full schema metadata | ✅ |
 | Ibis expressions: filter, select, join, group\_by, agg, order\_by, limit | ✅ |
 | `con.sql(...)` raw SQL | ✅ |
 | `.execute()` → pandas, `.to_pyarrow()`, `.to_pyarrow_batches()` | ✅ |
 | `list_catalogs`, `list_databases`, `list_tables` | ✅ |
 | Arrow / Parquet column types (timestamp, decimal, list, duration, …) | ✅ |
-| Vector search (`ibis_hotdata.vector.semantic_search`) | ✅ |
+| Vector search (`ibis_hotdata.vector.semantic_search`, vector or text query) | ✅ |
 | Temporary tables | ❌ |
 | In-memory tables (`ibis.memtable(...)`) | ❌ |
 | Python UDFs | ❌ |

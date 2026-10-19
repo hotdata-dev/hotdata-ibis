@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Vector search: create a managed table with an embedding column, query it with
-``ibis_hotdata.vector.semantic_search``.
+"""Vector search: create a managed table with an embedding column, index it with
+``con.create_index``, query it with ``ibis_hotdata.vector.semantic_search``.
 
 Uses small toy 4-dimensional vectors (not real embeddings) split into two obvious
 clusters -- "pets" and "finance" -- so the nearest-neighbor ordering is easy to
@@ -51,10 +51,15 @@ def write(api_url: str, token: str, workspace_id: str) -> str:
     con = ibis.hotdata.connect(api_url=api_url, token=token, workspace_id=workspace_id)
     database_id = con.create_database(DATABASE, tables=["docs"], schema=SCHEMA)
     con.create_table("docs", DOCS, database=(database_id, SCHEMA), overwrite=True)
-    con.disconnect()
 
-    # Uploads are async; give the load a moment to finish before querying.
+    # Uploads are async; give the load a moment to finish before indexing.
     time.sleep(2)
+    con.create_index(
+        "docs", "embedding", name="docs_embedding_idx", database=(database_id, SCHEMA),
+        metric="cosine",
+    )
+    print(con.list_indexes("docs", database=(database_id, SCHEMA)))
+    con.disconnect()
     return database_id
 
 
@@ -90,7 +95,7 @@ def main() -> None:
     token = os.environ["HOTDATA_API_KEY"]
     workspace_id = os.environ["HOTDATA_WORKSPACE"]
 
-    print("== CREATE + WRITE (con.create_database / con.create_table) ==")
+    print("== CREATE + WRITE + INDEX (create_database / create_table / create_index) ==")
     database_id = write(API_BASE_URL, token, workspace_id)
     print(f"created database_id={database_id}")
 

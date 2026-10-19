@@ -8,6 +8,7 @@ from ibis_hotdata.vector import (
     l2_distance,
     negative_dot_product,
     semantic_search,
+    vector_distance,
 )
 
 ITEMS = ibis.table(
@@ -73,3 +74,25 @@ def test_semantic_search_honors_custom_distance_fn_and_name():
 def test_semantic_search_accepts_column_expression():
     expr = semantic_search(ITEMS, ITEMS.embedding, [0.1, 0.2, 0.3], k=5)
     assert "embedding" not in expr.columns
+
+
+DOCS = ibis.table(
+    {"id": "int64", "body": "string", "body_embedding": "array<float32>"},
+    name="docs",
+)
+
+
+def test_vector_distance_compiles_to_function_call():
+    expr = DOCS.select(dist=vector_distance(DOCS.body, ibis.literal("cats")))
+    sql = ibis.to_sql(expr, dialect="postgres")
+    assert "VECTOR_DISTANCE(\"t0\".\"body\", 'cats')" in sql
+
+
+def test_semantic_search_text_query_uses_vector_distance():
+    expr = semantic_search(DOCS, "body", "cats", k=3, distance_fn=l2_distance)
+    sql = ibis.to_sql(expr, dialect="postgres")
+    assert "VECTOR_DISTANCE" in sql
+    assert "L2_DISTANCE" not in sql
+    assert "LIMIT 3" in sql
+    # Keeps the text column, drops the generated vector column.
+    assert set(expr.columns) == {"id", "body", "distance"}
