@@ -75,6 +75,10 @@ con = ibis.hotdata.connect(
 )
 ```
 
+A query the server rejects as overloaded (HTTP 429) is retried automatically:
+up to 5 retries within 120 seconds, waiting as long as the server's `Retry-After`
+says. If it is still overloaded after that, the query raises an error.
+
 `api_url`, `token` and `workspace_id` fall back to the `HOTDATA_API_URL`,
 `HOTDATA_API_KEY` and `HOTDATA_WORKSPACE` environment variables (same as the
 Hotdata CLI), so with those set this is enough:
@@ -123,6 +127,22 @@ con.create_table(
 ```
 
 Declaring table names in `tables=` is optional — loading into a table that was not declared creates it automatically as part of the load.
+
+### Table layout
+
+`layout=` sets how a new table's data files are written:
+
+| Layout | Use it for |
+|--------|------------|
+| `"analytical"` (default) | Scans and aggregations |
+| `"point_lookup"` | Fetching single rows by id, as vector search does. Scans read more pages |
+
+```python
+con.create_table("docs", docs_df, database=(database_id, "main"), layout="point_lookup")
+```
+
+The layout is fixed when the table is created. Passing a different layout for a
+table that already exists raises `IbisInputError`; drop the table first.
 
 ### Query
 
@@ -259,6 +279,9 @@ con.list_indexes("docs", database=db)
 con.drop_index("docs", "docs_idx", database=db)
 ```
 
+For a table used mainly for vector search, create it with `layout="point_lookup"`
+(see [Table layout](#table-layout)).
+
 `index_type` can also be `"bm25"` (full-text) or `"sorted"`. The index builds within
 one request, so raise `timeout=` on `connect` for large tables.
 
@@ -294,6 +317,7 @@ con.list_tables(database=(conn_id, "public"))      # tables
 |---------|--------|
 | `create_database` / `drop_database` (managed) | ✅ |
 | `create_table` from pandas / PyArrow / schema-only | ✅ |
+| `create_table(..., layout=)` (`analytical` / `point_lookup`) | ✅ |
 | `drop_table` | ✅ |
 | `create_index` / `list_indexes` / `drop_index` (vector HNSW/IVF, BM25, sorted) | ✅ |
 | `con.table(...)` with full schema metadata | ✅ |
