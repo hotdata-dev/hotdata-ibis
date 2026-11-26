@@ -5,6 +5,7 @@ from __future__ import annotations
 import http
 import io
 import json
+import random
 import time
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, TypeVar
@@ -24,11 +25,14 @@ from hotdata.api import (
 )
 from hotdata.exceptions import ApiException
 from hotdata.models import QueryRequest
+from hotdata.models.add_managed_table_request import AddManagedTableRequest
 from hotdata.models.create_database_request import CreateDatabaseRequest
 from hotdata.models.create_index_request import CreateIndexRequest
 from hotdata.models.database_default_schema_decl import DatabaseDefaultSchemaDecl
 from hotdata.models.database_default_table_decl import DatabaseDefaultTableDecl
 from hotdata.models.load_managed_table_request import LoadManagedTableRequest
+from hotdata.models.table_layout import TableLayout
+from hotdata.query import RetryPolicy
 from hotdata.uploads import UploadError, UploadsApi
 
 T = TypeVar("T")
@@ -81,6 +85,19 @@ def _from_raw_error(status: int, reason: str | None, body: bytes) -> HotdataAPIE
     return HotdataAPIError(msg.strip(), status_code=status, body=text)
 
 
+def _overload_delay(headers: Any, attempt: int, policy: RetryPolicy) -> float:
+    """Seconds to wait before retry number ``attempt`` of an overloaded (429) query.
+
+    Uses the server's ``Retry-After`` when it sends one, else exponential
+    backoff. Jitter keeps concurrent clients from retrying in step.
+    """
+    try:
+        base = max(float(headers.get("Retry-After")), 0.0)
+    except (TypeError, ValueError):
+        base = min(policy.base_backoff_s * 2 ** (attempt - 1), policy.max_backoff_s)
+    return base + base * policy.jitter * random.random()
+
+
 def _int_header(value: str | None) -> int | None:
     try:
         return int(value) if value is not None else None
@@ -126,6 +143,7 @@ class HotdataClient:
         self._timeout = timeout
         self._client = ApiClient(conf)
         self._query = QueryApi(self._client)
+        self._retry = RetryPolicy()
         self._query_runs = QueryRunsApi(self._client)
         self._results = ResultsApi(self._client)
         self._connections = ConnectionsApi(self._client)
@@ -193,16 +211,7 @@ class HotdataClient:
         kwargs: dict[str, Any] = {}
         if database_id is not None:
             kwargs["x_database_id"] = database_id
-        try:
-            raw = self._query.query_without_preload_content(
-                req,
-                _headers={"Accept": APPLICATION_ARROW_STREAM},
-                _request_timeout=self._timeout,
-                **kwargs,
-            )
-        except ApiException as exc:
-            raise _from_api_exception(exc) from exc
-        body = raw.read()
+        raw, body = self._post_query(req, kwargs)
         status = raw.status
         headers = raw.headers
         ctype = (headers.get("Content-Type") or "").split(";")[0].strip().lower()
@@ -242,6 +251,35 @@ class HotdataClient:
             raise HotdataAPIError("Unexpected query response type", status_code=status, body=d)
 
         raise _from_raw_error(status, raw.reason, body)
+
+    def _post_query(self, req: QueryRequest, kwargs: dict[str, Any]) -> tuple[Any, bytes]:
+        """POST ``/v1/query``, retrying while the server answers 429 (overloaded).
+
+        A 429 means the query was not admitted, so sending it again cannot run
+        it twice. Returns the last response once the retries run out; the
+        caller turns that into a :class:`HotdataAPIError` like any other error.
+        """
+        policy = self._retry
+        deadline = time.monotonic() + policy.deadline_s
+        attempt = 0
+        while True:
+            try:
+                raw = self._query.query_without_preload_content(
+                    req,
+                    _headers={"Accept": APPLICATION_ARROW_STREAM},
+                    _request_timeout=self._timeout,
+                    **kwargs,
+                )
+            except ApiException as exc:
+                raise _from_api_exception(exc) from exc
+            body = raw.read()
+            if raw.status != http.HTTPStatus.TOO_MANY_REQUESTS:
+                return raw, body
+            attempt += 1
+            delay = _overload_delay(raw.headers, attempt, policy)
+            if attempt > policy.max_retries or time.monotonic() + delay > deadline:
+                return raw, body
+            time.sleep(delay)
 
     def _poll_query_run(
         self,
@@ -345,6 +383,18 @@ class HotdataClient:
             req,
         )
         return resp.model_dump(by_alias=True, mode="json")
+
+    def add_managed_table(
+        self,
+        connection_id: str,
+        schema: str,
+        table: str,
+        *,
+        layout: str,
+    ) -> None:
+        """Declare an empty managed table. ``layout`` is fixed from here on."""
+        req = AddManagedTableRequest(name=table, layout=TableLayout(layout))
+        self._safe_call(self._connections.add_managed_table, connection_id, schema, req)
 
     def delete_managed_table(self, connection_id: str, schema: str, table: str) -> None:
         self._safe_call(

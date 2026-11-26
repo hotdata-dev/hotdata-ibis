@@ -17,6 +17,8 @@ pytest.importorskip("pytest_httpserver")
 from conftest import mock_presigned_upload_flow
 from pytest_httpserver import HTTPServer
 
+from ibis_hotdata.http import HotdataAPIError
+
 # Instant database identifiers for mocked Hotdata (SQL shape ``sales.public.orders``).
 MANAGED_DB_ID = "db_sales"      # databases API id
 MANAGED_CONN = "conn_sales"     # default_connection_id (backing connection for loads)
@@ -37,13 +39,19 @@ TPCH_CUSTOMER_COLS = [
 ]
 
 
-# TableInfo requires these from hotdata 0.9.0 on (constant_per_key from 0.12.0).
+# TableInfo requires these from hotdata 0.9.0 on (constant_per_key from 0.12.0,
+# layout from 0.15).
 # The API always sends them, and an omission fails validation for the WHOLE
 # information_schema call rather than for that field — nine tests here failed
 # exactly that way before each was added.
 # Spread into each fixture rather than repeated, so the next required field is a
 # one-line change here.
-_REQUIRED_TABLE_FIELDS = {"constant_per_key": [], "partition_by": [], "sorted_by": []}
+_REQUIRED_TABLE_FIELDS = {
+    "constant_per_key": [],
+    "layout": "analytical",
+    "partition_by": [],
+    "sorted_by": [],
+}
 
 
 def arrow_stream(table: pa.Table) -> bytes:
@@ -84,6 +92,7 @@ def information_schema_response(
     columns: list[dict],
     *,
     connection: str = MANAGED_CONN,
+    layout: str = "analytical",
 ) -> dict:
     return {
         "count": 1,
@@ -96,6 +105,7 @@ def information_schema_response(
                 "schema": schema_name,
                 "table": table_name,
                 **_REQUIRED_TABLE_FIELDS,
+                "layout": layout,
                 "synced": True,
                 "last_sync": None,
                 "columns": columns,
@@ -112,6 +122,7 @@ def mock_managed_create_table_flow(
     columns: list[dict],
     on_upload: Callable[[Request], Response] | None = None,
     table_exists: bool = False,
+    layout: str = "analytical",
 ) -> None:
     httpserver.expect_request(f"/v1/databases/{MANAGED_DB_ID}").respond_with_json(
         managed_database_detail_response()
@@ -146,7 +157,9 @@ def mock_managed_create_table_flow(
     def on_information_schema(req: Request) -> Response:
         info_calls["n"] += 1
         if table_exists or info_calls["n"] > 1:
-            payload = information_schema_response(table_name, schema_name, columns)
+            payload = information_schema_response(
+                table_name, schema_name, columns, layout=layout
+            )
         else:
             payload = {
                 "count": 0,
@@ -507,6 +520,168 @@ def test_create_table_without_overwrite_rejects_existing_table(httpserver: HTTPS
             pd.DataFrame({"x": [1]}),
             database=(MANAGED_DB_ID, PUBLIC),
         )
+
+
+def test_create_table_with_layout_declares_table_before_load(httpserver: HTTPServer, srv: str):
+    mock_managed_create_table_flow(
+        httpserver,
+        table_name="docs",
+        columns=[{"name": "x", "data_type": "BIGINT", "nullable": True}],
+        layout="point_lookup",
+    )
+    declared: list[dict] = []
+
+    def on_declare(req: Request) -> Response:
+        declared.append(req.get_json())
+        body = {"connection_id": MANAGED_CONN, "schema": PUBLIC, "table": "docs"}
+        return Response(json.dumps(body), status=201, content_type="application/json")
+
+    httpserver.expect_request(
+        f"/v1/connections/{MANAGED_CONN}/schemas/{PUBLIC}/tables", method="POST"
+    ).respond_with_handler(on_declare)
+
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+    con.create_table(
+        "docs",
+        pd.DataFrame({"x": [1]}),
+        database=(MANAGED_DB_ID, PUBLIC),
+        layout="point_lookup",
+    )
+
+    assert declared == [{"name": "docs", "layout": "point_lookup"}]
+
+
+def test_create_table_with_layout_removes_declared_table_when_load_fails(
+    httpserver: HTTPServer, srv: str
+):
+    tables = f"/v1/connections/{MANAGED_CONN}/schemas/{PUBLIC}/tables"
+    # Registered first: pytest-httpserver uses the first handler that matches.
+    httpserver.expect_request(f"{tables}/docs/loads", method="POST").respond_with_json(
+        {"error": {"code": "BAD_REQUEST", "message": "bad parquet"}}, status=400
+    )
+    mock_managed_create_table_flow(
+        httpserver,
+        table_name="docs",
+        columns=[{"name": "x", "data_type": "BIGINT", "nullable": True}],
+    )
+    httpserver.expect_request(tables, method="POST").respond_with_json(
+        {"connection_id": MANAGED_CONN, "schema": PUBLIC, "table": "docs"}, status=201
+    )
+    deleted: list[str] = []
+
+    def on_delete(req: Request) -> Response:
+        deleted.append(req.path)
+        return Response(b"", status=204)
+
+    httpserver.expect_request(f"{tables}/docs", method="DELETE").respond_with_handler(on_delete)
+
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+
+    with pytest.raises(com.IbisError, match="bad parquet"):
+        con.create_table(
+            "docs",
+            pd.DataFrame({"x": [1]}),
+            database=(MANAGED_DB_ID, PUBLIC),
+            layout="point_lookup",
+        )
+
+    assert deleted == [f"{tables}/docs"]
+
+
+def test_create_table_layout_matching_existing_table_skips_declare(
+    httpserver: HTTPServer, srv: str
+):
+    # No handler for the declare endpoint: calling it would fail the test.
+    mock_managed_create_table_flow(
+        httpserver,
+        table_name="docs",
+        columns=[{"name": "x", "data_type": "BIGINT", "nullable": True}],
+        table_exists=True,
+        layout="point_lookup",
+    )
+
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+    con.create_table(
+        "docs",
+        pd.DataFrame({"x": [1]}),
+        database=(MANAGED_DB_ID, PUBLIC),
+        overwrite=True,
+        layout="point_lookup",
+    )
+
+
+def test_create_table_rejects_layout_change_on_existing_table(httpserver: HTTPServer, srv: str):
+    mock_managed_create_table_flow(
+        httpserver,
+        table_name="docs",
+        columns=[{"name": "x", "data_type": "BIGINT", "nullable": True}],
+        table_exists=True,
+    )
+
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+
+    with pytest.raises(com.IbisInputError, match="layout cannot be changed"):
+        con.create_table(
+            "docs",
+            pd.DataFrame({"x": [1]}),
+            database=(MANAGED_DB_ID, PUBLIC),
+            overwrite=True,
+            layout="point_lookup",
+        )
+
+
+def test_create_table_rejects_unknown_layout(httpserver: HTTPServer, srv: str):
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+
+    with pytest.raises(com.IbisInputError, match="Unknown layout"):
+        con.create_table("docs", pd.DataFrame({"x": [1]}), layout="columnar")
+
+
+def _overloaded_then(httpserver: HTTPServer, *, overloaded: int, then_ok: bool) -> dict:
+    """Answer ``/v1/query`` with ``overloaded`` 429s, then (optionally) rows."""
+    calls = {"n": 0, "rejected": 0}
+
+    def on_query(req: Request) -> Response:
+        calls["n"] += 1
+        if then_ok and calls["n"] > overloaded:
+            return Response(
+                arrow_stream(pa.table({"x": [1]})),
+                status=200,
+                content_type="application/vnd.apache.arrow.stream",
+            )
+        calls["rejected"] += 1
+        return Response(
+            json.dumps({"error": {"code": "OVERLOADED", "message": "busy"}}),
+            status=429,
+            content_type="application/json",
+            headers={"Retry-After": "0"},
+        )
+
+    httpserver.expect_request("/v1/query", method="POST").respond_with_handler(on_query)
+    return calls
+
+
+def test_query_retries_when_server_is_overloaded(httpserver: HTTPServer, srv: str):
+    calls = _overloaded_then(httpserver, overloaded=2, then_ok=True)
+
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+    pdf = con.sql("SELECT 1 AS x", dialect="postgres").execute()
+
+    assert list(pdf["x"]) == [1]
+    assert calls["rejected"] == 2
+
+
+def test_query_raises_after_overload_retries_run_out(httpserver: HTTPServer, srv: str):
+    calls = _overloaded_then(httpserver, overloaded=0, then_ok=False)
+
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+
+    with pytest.raises(com.IbisError) as excinfo:
+        con.sql("SELECT 1 AS x", dialect="postgres").execute()
+
+    assert calls["n"] == 6  # the first request plus 5 retries
+    assert isinstance(excinfo.value.__cause__, HotdataAPIError)
+    assert excinfo.value.__cause__.status_code == 429
 
 
 def test_create_database_posts_managed_connection(httpserver: HTTPServer, srv: str):

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `create_table(..., layout=)` sets a new table's storage layout:
+  `"analytical"` (the default) or `"point_lookup"` for cheap single-row
+  fetches, as vector search does. The layout is fixed once the table exists.
+
+### Changed
+
+- Require `hotdata>=0.15,<0.16` (was `>=0.12,<0.13`).
+- Queries are retried when the server answers 429 (overloaded): up to 5
+  retries within 120 seconds, waiting as `Retry-After` says. They used to fail
+  on the first 429.
+
 ## [0.7.0] - 2026-10-19
 
 ### Added

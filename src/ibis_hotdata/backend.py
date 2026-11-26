@@ -46,6 +46,7 @@ from ibis_hotdata.http import HotdataAPIError, HotdataClient
 from ibis_hotdata.types import dtype_from_hotdata_sql_type
 
 _INFORMATION_SCHEMA_PAGE_SIZE = 500
+_TABLE_LAYOUTS = frozenset({"analytical", "point_lookup"})
 
 
 def _ibis_err_from_hotdata(exc: HotdataAPIError) -> com.IbisError:
@@ -369,26 +370,20 @@ class Backend(
             raise com.IbisError(f"Unknown instant database {database_id!r}")
         return result
 
-    def _managed_table_synced(
+    def _managed_table_info(
         self,
         connection_id: str,
         schema_name: str,
         table_name: str,
-    ) -> bool:
-        """Return True only if the table exists and its last load has completed.
-
-        A table whose ``synced`` flag is False is still being loaded; we treat
-        it as writable (returns False) so that an in-progress load can be
-        retried without requiring ``overwrite=True``. Tables not present in the
-        information schema also return False (not yet created).
-        """
+    ) -> Mapping[str, Any] | None:
+        """Return the table's information-schema row, or None if it does not exist."""
         for row in self._iterate_information_schema(
             {"connection_id": connection_id, "schema": schema_name, "table": table_name},
             include_columns=False,
         ):
             if row["table"] == table_name and row["schema"] == schema_name:
-                return bool(row.get("synced", True))
-        return False
+                return row
+        return None
 
     def _table_location(
         self,
@@ -680,6 +675,7 @@ class Backend(
         database: tuple[str, str] | str | None = None,
         temp: bool = False,
         overwrite: bool = False,
+        layout: str | None = None,
     ) -> ir.Table:
         """Upload local data into a managed table.
 
@@ -693,21 +689,46 @@ class Backend(
         Hotdata loads always use ``replace`` mode (the only API option). When
         ``overwrite=False`` (the Ibis default), an existing synced table raises
         :class:`~ibis.common.exceptions.IbisInputError` instead of replacing it.
+
+        ``layout`` sets how a new table's data files are written:
+        ``"analytical"`` (the server default) for scans, or ``"point_lookup"``
+        for cheap fetches of single rows, as vector search does. It is fixed
+        when the table is created, so a different layout for a table that
+        already exists raises :class:`~ibis.common.exceptions.IbisInputError`;
+        drop the table first.
         """
         if temp:
             raise NotImplementedError("Hotdata does not support temporary tables.")
+        if layout is not None and layout not in _TABLE_LAYOUTS:
+            raise com.IbisInputError(
+                f"Unknown layout {layout!r}; expected one of {sorted(_TABLE_LAYOUTS)}"
+            )
 
         data = self._local_table_to_parquet(obj, schema)
         connection_id, schema_name = self._table_location(database)
         # Cache the resolved connection_id so get_schema can use it for info schema
         # API calls when the "default" catalog is used in instant database contexts.
         self._database_connection_id = connection_id
-        if not overwrite and self._managed_table_synced(connection_id, schema_name, name):
+        existing = self._managed_table_info(connection_id, schema_name, name)
+        # A table whose ``synced`` flag is False is still being loaded; it stays
+        # writable so an in-progress load can be retried without overwrite=True.
+        if not overwrite and existing is not None and existing.get("synced", True):
             raise com.IbisInputError(
                 f"Table {name!r} already exists; pass overwrite=True to replace"
             )
+        if layout is not None and existing is not None and existing.get("layout") != layout:
+            raise com.IbisInputError(
+                f"Table {name!r} already exists with layout {existing.get('layout')!r}; "
+                "a table's layout cannot be changed. Drop the table first."
+            )
         upload = self.upload_file(data, content_type="application/parquet")
+        declared = False
         try:
+            if layout is not None and existing is None:
+                # A load creates a missing table with the default layout, so a
+                # table with a chosen layout has to be declared before its load.
+                self._http.add_managed_table(connection_id, schema_name, name, layout=layout)
+                declared = True
             self._http.load_managed_table(
                 connection_id,
                 schema_name,
@@ -715,6 +736,11 @@ class Backend(
                 upload_id=upload["upload_id"],
             )
         except HotdataAPIError as exc:
+            if declared:
+                # Do not leave the empty table behind: a retry would find it and
+                # could report "already exists" for a table that was never filled.
+                with contextlib.suppress(HotdataAPIError):
+                    self._http.delete_managed_table(connection_id, schema_name, name)
             raise _ibis_err_from_hotdata(exc) from exc
         # Instant database SQL requires "default" as the catalog prefix, not the
         # raw connection_id.  _table_location always sets _database_id when resolving
