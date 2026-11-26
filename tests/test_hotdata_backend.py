@@ -551,6 +551,43 @@ def test_create_table_with_layout_declares_table_before_load(httpserver: HTTPSer
     assert declared == [{"name": "docs", "layout": "point_lookup"}]
 
 
+def test_create_table_with_layout_removes_declared_table_when_load_fails(
+    httpserver: HTTPServer, srv: str
+):
+    tables = f"/v1/connections/{MANAGED_CONN}/schemas/{PUBLIC}/tables"
+    # Registered first: pytest-httpserver uses the first handler that matches.
+    httpserver.expect_request(f"{tables}/docs/loads", method="POST").respond_with_json(
+        {"error": {"code": "BAD_REQUEST", "message": "bad parquet"}}, status=400
+    )
+    mock_managed_create_table_flow(
+        httpserver,
+        table_name="docs",
+        columns=[{"name": "x", "data_type": "BIGINT", "nullable": True}],
+    )
+    httpserver.expect_request(tables, method="POST").respond_with_json(
+        {"connection_id": MANAGED_CONN, "schema": PUBLIC, "table": "docs"}, status=201
+    )
+    deleted: list[str] = []
+
+    def on_delete(req: Request) -> Response:
+        deleted.append(req.path)
+        return Response(b"", status=204)
+
+    httpserver.expect_request(f"{tables}/docs", method="DELETE").respond_with_handler(on_delete)
+
+    con = ibis.hotdata.connect(api_url=srv, token="tok", workspace_id="ws", verify_ssl=False)
+
+    with pytest.raises(com.IbisError, match="bad parquet"):
+        con.create_table(
+            "docs",
+            pd.DataFrame({"x": [1]}),
+            database=(MANAGED_DB_ID, PUBLIC),
+            layout="point_lookup",
+        )
+
+    assert deleted == [f"{tables}/docs"]
+
+
 def test_create_table_layout_matching_existing_table_skips_declare(
     httpserver: HTTPServer, srv: str
 ):

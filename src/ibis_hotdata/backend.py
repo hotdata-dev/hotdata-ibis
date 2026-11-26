@@ -722,11 +722,13 @@ class Backend(
                 "a table's layout cannot be changed. Drop the table first."
             )
         upload = self.upload_file(data, content_type="application/parquet")
+        declared = False
         try:
             if layout is not None and existing is None:
                 # A load creates a missing table with the default layout, so a
                 # table with a chosen layout has to be declared before its load.
                 self._http.add_managed_table(connection_id, schema_name, name, layout=layout)
+                declared = True
             self._http.load_managed_table(
                 connection_id,
                 schema_name,
@@ -734,6 +736,11 @@ class Backend(
                 upload_id=upload["upload_id"],
             )
         except HotdataAPIError as exc:
+            if declared:
+                # Do not leave the empty table behind: a retry would find it and
+                # could report "already exists" for a table that was never filled.
+                with contextlib.suppress(HotdataAPIError):
+                    self._http.delete_managed_table(connection_id, schema_name, name)
             raise _ibis_err_from_hotdata(exc) from exc
         # Instant database SQL requires "default" as the catalog prefix, not the
         # raw connection_id.  _table_location always sets _database_id when resolving
